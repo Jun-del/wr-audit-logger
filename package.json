@@ -1,0 +1,57 @@
+{
+  "name": "@white-room/audit-logger",
+  "version": "0.0.1",
+  "description": "Automatic audit logging for PostgreSQL",
+  "keywords": [],
+  "license": "ISC",
+  "author": "White Room",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "ci": "pnpm run build && pnpm run fmt:check && pnpm run typecheck && pnpm run test",
+    "coverage": "vitest run --coverage",
+    "dev": "tsdown --watch",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "local-release": "changeset version && changeset publish",
+    "prepublishOnly": "npm run ci",
+    "test": "vitest run",
+    "test:ui": "vitest --ui",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.8",
+    "@types/node": "^25.0.10",
+    "@vitest/ui": "^4.0.18",
+    "oxfmt": "^0.26.0",
+    "oxlint": "^1.41.0",
+    "oxlint-tsgolint": "^0.11.1",
+    "tsdown": "^0.20.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=24",
+    "pnpm": "10.28.1"
+  },
+  "packageManager": "pnpm@10.28.1"
+}
