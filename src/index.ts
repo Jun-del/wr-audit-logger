@@ -9,27 +9,37 @@ export type { AuditAction, AuditLog, AuditLogEntry, StoredAuditLog } from "./typ
 // Re-export schema and migration
 export { auditLogs, createAuditTableSQL } from "./storage/schema.js";
 
+// Re-export utilities
+export { initializeAuditLogging, checkAuditSetup, getAuditStats } from "./utils/migration.js";
+
 /**
- * Create an audit logger instance
+ * Create an audit logger instance with automatic interception
  *
  * @example
  * ```typescript
- * const auditLogger = createAuditLogger(db, {
+ * const { db } = createAuditLogger(originalDb, {
  *   tables: ['users', 'vehicles'],
  *   getUserId: () => getCurrentUser()?.id,
  * });
  *
  * // Set context (e.g., in Express middleware)
- * auditLogger.setContext({
- *   userId: req.user.id,
- *   ipAddress: req.ip,
+ * app.use((req, res, next) => {
+ *   auditLogger.setContext({
+ *     userId: req.user.id,
+ *     ipAddress: req.ip,
+ *   });
+ *   next();
  * });
  *
- * // Perform operations
+ * // Operations are automatically audited!
  * const user = await db.insert(users).values(data).returning();
+ * // ✓ Audit log created automatically
  *
- * // Manually log (for MVP)
- * await auditLogger.logInsert('users', user);
+ * const updated = await db.update(users)
+ *   .set({ name: 'New Name' })
+ *   .where(eq(users.id, userId))
+ *   .returning();
+ * // ✓ Audit log created with before/after values
  * ```
  */
 export function createAuditLogger(db: PostgresJsDatabase<any>, config: AuditConfig) {
@@ -37,23 +47,23 @@ export function createAuditLogger(db: PostgresJsDatabase<any>, config: AuditConf
 
   return {
     /**
-     * The original database instance
-     * Use this for all database operations
+     * The wrapped database instance with automatic audit logging
+     * Use this instead of your original db instance
      */
-    db,
+    db: logger.createAuditedDb(),
 
     /**
-     * Manually log an INSERT operation
+     * Manually log an INSERT operation (for edge cases)
      */
     logInsert: logger.logInsert.bind(logger),
 
     /**
-     * Manually log an UPDATE operation
+     * Manually log an UPDATE operation (for edge cases)
      */
     logUpdate: logger.logUpdate.bind(logger),
 
     /**
-     * Manually log a DELETE operation
+     * Manually log a DELETE operation (for edge cases)
      */
     logDelete: logger.logDelete.bind(logger),
 

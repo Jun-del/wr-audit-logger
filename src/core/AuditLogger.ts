@@ -5,6 +5,7 @@ import { createInsertAuditLogs } from "../capture/insert.js";
 import { createUpdateAuditLogs } from "../capture/update.js";
 import { AuditWriter } from "../storage/writer.js";
 import { AuditContextManager } from "./context.js";
+import { createInterceptedDb } from "./interceptor.js";
 
 /**
  * Main audit logger class
@@ -41,7 +42,7 @@ export class AuditLogger {
   /**
    * Check if a table should be audited
    */
-  private shouldAudit(tableName: string): boolean {
+  private shouldAuditInternal(tableName: string): boolean {
     // Never audit the audit table itself
     if (tableName === this.config.auditTable) {
       return false;
@@ -56,12 +57,18 @@ export class AuditLogger {
 
   /**
    * Create a wrapped database instance with audit logging
+   * This is now the automatic interceptor implementation
    */
   createAuditedDb(): PostgresJsDatabase<any> {
-    // For MVP, we'll use a simpler approach
-    // Return the original db with manual audit methods
-    // Full proxy implementation can be added in Phase 2
-    return this.db;
+    return createInterceptedDb(this.db, this);
+  }
+
+  /**
+   * Internal method to check if table should be audited
+   * Exposed for use by interceptor
+   */
+  shouldAudit(tableName: string): boolean {
+    return this.shouldAuditInternal(tableName);
   }
 
   /**
@@ -72,7 +79,7 @@ export class AuditLogger {
     tableName: string,
     insertedRecords: Record<string, unknown> | Record<string, unknown>[],
   ): Promise<void> {
-    if (!this.shouldAudit(tableName)) return;
+    if (!this.shouldAuditInternal(tableName)) return;
 
     const records = Array.isArray(insertedRecords) ? insertedRecords : [insertedRecords];
     const logs = createInsertAuditLogs(tableName, records, this.config);
@@ -89,7 +96,7 @@ export class AuditLogger {
     beforeRecords: Record<string, unknown> | Record<string, unknown>[],
     afterRecords: Record<string, unknown> | Record<string, unknown>[],
   ): Promise<void> {
-    if (!this.shouldAudit(tableName)) return;
+    if (!this.shouldAuditInternal(tableName)) return;
 
     const before = Array.isArray(beforeRecords) ? beforeRecords : [beforeRecords];
     const after = Array.isArray(afterRecords) ? afterRecords : [afterRecords];
@@ -105,7 +112,7 @@ export class AuditLogger {
     tableName: string,
     deletedRecords: Record<string, unknown> | Record<string, unknown>[],
   ): Promise<void> {
-    if (!this.shouldAudit(tableName)) return;
+    if (!this.shouldAuditInternal(tableName)) return;
 
     const records = Array.isArray(deletedRecords) ? deletedRecords : [deletedRecords];
     const logs = createDeleteAuditLogs(tableName, records, this.config);

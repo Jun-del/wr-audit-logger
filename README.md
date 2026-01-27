@@ -1,15 +1,7 @@
 # audit-logger
 
-Automatic audit logging for Drizzle ORM and PostgreSQL. Track who changed what and when with minimal code changes.
-
-## Features
-
-- 🔍 **Automatic audit logging** for INSERT, UPDATE, and DELETE operations
-- 🎯 **Configurable** - choose which tables and fields to audit
-- 🔒 **Type-safe** - Full TypeScript support
-- ⚡ **Minimal overhead** - Efficient logging with configurable strategies
-- 🧩 **Context-aware** - Track user, IP, and custom metadata
-- 🛡️ **Production-ready** - Proper error handling and transaction support
+Automatic audit logging for **Drizzle ORM + PostgreSQL**.
+Track who changed what and when — **without manual logging calls**.
 
 ## Installation
 
@@ -23,9 +15,9 @@ yarn add audit-logger
 
 ## Quick Start
 
-### 1. Set up the audit table
+### 1. Create the audit table
 
-```typescript
+```ts
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { createAuditTableSQL } from "audit-logger";
@@ -37,72 +29,83 @@ const db = drizzle(client);
 await db.execute(createAuditTableSQL);
 ```
 
-### 2. Create an audit logger
+### 2. Create an audit logger (wraps your db)
 
-```typescript
+```ts
 import { createAuditLogger } from "audit-logger";
 
 const auditLogger = createAuditLogger(db, {
   tables: ["users", "vehicles"],
   excludeFields: ["password", "token"],
-  getUserId: () => getCurrentUser()?.id,
+  getUserId: () = getCurrentUser()?.id,
 });
+
+// IMPORTANT: use the wrapped db
+const { db: auditedDb } = auditLogger;
 ```
 
-### 3. Set context (e.g., in Express middleware)
+### 3. Set context (example: Express middleware)
 
-```typescript
-app.use((req, res, next) => {
+```ts
+app.use((req, res, next) = {
   auditLogger.setContext({
     userId: req.user?.id,
     ipAddress: req.ip,
     userAgent: req.get("user-agent"),
+    metadata: {
+      path: req.path,
+      method: req.method,
+    },
   });
+
   next();
 });
 ```
 
-### 4. Log your operations
+### 4. Use the database normally — auditing is automatic
 
-```typescript
+```ts
 // INSERT
-const [user] = await db.insert(users).values(data).returning();
-await auditLogger.logInsert("users", user);
+const [user] = await auditedDb.insert(users).values(data).returning();
 
-// UPDATE (need before state)
-const [before] = await db.select().from(users).where(eq(users.id, id));
-const [after] = await db.update(users).set(changes).where(eq(users.id, id)).returning();
-await auditLogger.logUpdate("users", before, after);
+// UPDATE (before/after captured automatically)
+const [updated] = await auditedDb
+  .update(users)
+  .set({ name: "New Name" })
+  .where(eq(users.id, userId))
+  .returning();
 
 // DELETE
-const [deleted] = await db.delete(users).where(eq(users.id, id)).returning();
-await auditLogger.logDelete("users", deleted);
+await auditedDb.delete(users).where(eq(users.id, userId));
 ```
+
+No manual audit calls.
+No extra code per operation.
 
 ## Configuration
 
-```typescript
+```ts
 interface AuditConfig {
   // Tables to audit
   tables: string[] | "*";
 
   // Specific fields per table (optional)
-  fields?: Record<string, string[]>;
+  fields?: Record<string, string[];
 
   // Fields to exclude globally
   excludeFields?: string[];
 
-  // Audit table name
+  // Audit table name (default: audit_logs)
   auditTable?: string;
 
-  // Fail operations if audit fails
+  // Fail the DB operation if audit logging fails
   strictMode?: boolean;
 
-  // Get current user ID
-  getUserId?: () => string | undefined | Promise<string | undefined>;
+  // Resolve current user id
+  getUserId?: () = string | undefined | Promise<string | undefined;
 
-  // Get additional metadata
-  getMetadata?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  // Resolve additional metadata
+  getMetadata?: () = Record<string, unknown | Promise<Record<string, unknown;
 }
 ```
 
@@ -110,57 +113,82 @@ interface AuditConfig {
 
 ### Audit all tables
 
-```typescript
+```ts
 const auditLogger = createAuditLogger(db, {
-  tables: "*", // Audit everything
+  tables: "*",
   excludeFields: ["password", "token", "secret"],
 });
 ```
 
 ### Audit specific fields only
 
-```typescript
+```ts
 const auditLogger = createAuditLogger(db, {
   tables: ["users", "vehicles"],
   fields: {
-    users: ["id", "email", "role"], // Only track these fields
+    users: ["id", "email", "role"],
     vehicles: ["id", "make", "model", "status"],
   },
 });
 ```
 
-### With custom context
+### Custom context (background jobs, scripts)
 
-```typescript
+```ts
 await auditLogger.withContext(
   {
-    userId: 'SYSTEM',
-    metadata: { jobId: 'cleanup-job-123' },
+    userId: "SYSTEM",
+    metadata: {
+      jobId: "cleanup-job-123",
+      reason: "scheduled_maintenance",
+    },
   },
-  async () => {
-    // Operations here use this context
-    const deleted = await db.delete(expiredTokens)...;
-    await auditLogger.logDelete('tokens', deleted);
+  async () = {
+    await auditedDb
+      .delete(expiredTokens)
+      .where(lt(expiredTokens.expiresAt, new Date()));
   }
 );
 ```
 
+All operations inside the callback inherit this context.
+
+### Transactions
+
+All operations inside a transaction automatically share the same `transaction_id`.
+
+```ts
+await auditedDb.transaction(async (tx) = {
+  const [user] = await tx
+    .insert(users)
+    .values(userData)
+    .returning();
+
+  const [post] = await tx
+    .insert(posts)
+    .values({ ...postData, userId: user.id })
+    .returning();
+
+  // Both audit entries share the same transaction_id
+});
+```
+
 ## Querying Audit Logs
 
-```typescript
+```ts
 import { auditLogs } from "audit-logger";
 import { eq, desc } from "drizzle-orm";
 
-// Get history for a specific record
-const history = await db
+// History for a specific record
+const history = await auditedDb
   .select()
   .from(auditLogs)
   .where(eq(auditLogs.tableName, "users"))
   .where(eq(auditLogs.recordId, userId))
   .orderBy(desc(auditLogs.createdAt));
 
-// Get all changes by a user
-const userActivity = await db
+// All changes by a user
+const activity = await auditedDb
   .select()
   .from(auditLogs)
   .where(eq(auditLogs.userId, userId))
@@ -171,33 +199,22 @@ const userActivity = await db
 ## Development
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Run tests
 pnpm test
-
-# Run tests with UI
 pnpm test:ui
-
-# Build
 pnpm build
-
-# Lint
 pnpm lint
-
-# Format
 pnpm format
 ```
 
 ## Roadmap
 
-- [x] Phase 1: MVP with manual logging
-- [ ] Phase 2: Automatic interception via Drizzle hooks
-- [ ] Phase 3: Async/batch logging for performance
-- [ ] Phase 4: Support for other ORMs (Prisma, TypeORM)
-- [ ] Phase 5: Restore/rollback utilities
-- [ ] Phase 6: PostgreSQL trigger generation
+- [x] Phase 1 — Manual audit logging
+- [x] Phase 2 — Automatic interception (current)
+- [ ] Phase 3 — Async / batched writes
+- [ ] Phase 4 — ORM adapters (Prisma, TypeORM)
+- [ ] Phase 5 — Restore / rollback helpers
+- [ ] Phase 6 — PostgreSQL triggers (opt-in)
 
 ## Contributing
 
