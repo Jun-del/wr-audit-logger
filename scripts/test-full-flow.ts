@@ -4,6 +4,19 @@
  * Run with: pnpm tsx scripts/test-full-flow.ts
  */
 
+// TODO: Remove returning(), it should not be a requirement; for insert, can we capture the insert values from the proxy?
+// TODO: Make sure transaction works, test it
+// TODO: Single statement query fails, shouldn't log
+// TODO: Handle parallel query, multiple queries running at the same time, batching?
+// TODO: Make storing previous value configurable, since we need to query the prev values?
+// TODO: Make action table column configurable, we want support view/read, and it is not CUD database operation; User may use the manual function to log like logRead
+
+// TODO: Give a nice name
+// TODO: Open source it (optional), but build as a package
+// TODO: Try on Greenetrix (no code changes except setting it up)
+// TODO: Query and render on the frontend, pick between ZY and Justin
+// TODO: Skill sharing (next month) -> talk about lib, how it works, how I vibe code
+
 import { desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { pgTable, serial, text, varchar } from "drizzle-orm/pg-core";
@@ -82,6 +95,10 @@ async function main() {
     console.log("\n🔧 Step 3: Create audit logger");
     const auditLogger = createAuditLogger(originalDb, {
       tables: ["demo_users", "demo_posts"],
+      // fields: {
+      //   demo_users: ["email", "name", "role"],
+      //   demo_posts: ["title", "content", "author_id", "status"],
+      // },
       excludeFields: ["password"],
       getUserId: () => "admin-123",
       getMetadata: () => ({ app: "test-suite", version: "1.0.0" }),
