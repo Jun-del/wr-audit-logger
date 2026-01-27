@@ -15,6 +15,24 @@ yarn add audit-logger
 
 ## Quick Start
 
+## ⚠️ Required: Use `.returning()` for INSERT and UPDATE
+
+For automatic audit logging to work correctly, **all audited INSERT and UPDATE operations must use `.returning()`**.
+
+Why this is required:
+
+- Without `.returning()`, Drizzle returns only a PostgreSQL command result:
+  `{ command: "UPDATE", rowCount: 1, ... }`
+- With `.returning()`, Drizzle returns the actual inserted/updated row data
+- Audit logs require real row data to capture **before/after changes**
+
+If `.returning()` is omitted on an audited INSERT or UPDATE:
+
+- audit-logger cannot determine what changed
+- the operation will fail (by default) to prevent corrupted audit logs
+
+---
+
 ### 1. Create the audit table
 
 ```ts
@@ -62,7 +80,7 @@ app.use((req, res, next) = {
 });
 ```
 
-### 4. Use the database normally — auditing is automatic
+### 4. Use the database normally (with .returning() on INSERT/UPDATE) — auditing is automatic
 
 ```ts
 // INSERT

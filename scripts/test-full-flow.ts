@@ -142,20 +142,23 @@ async function main() {
         })
         .returning();
 
-      await tx.insert(posts).values([
-        {
-          title: "First Post",
-          content: "Hello World!",
-          authorId: author.id,
-          status: "published",
-        },
-        {
-          title: "Second Post",
-          content: "Another post",
-          authorId: author.id,
-          status: "draft",
-        },
-      ]);
+      await tx
+        .insert(posts)
+        .values([
+          {
+            title: "First Post",
+            content: "Hello World!",
+            authorId: author.id,
+            status: "published",
+          },
+          {
+            title: "Second Post",
+            content: "Another post",
+            authorId: author.id,
+            status: "draft",
+          },
+        ])
+        .returning();
 
       console.log(`   ✓ Created author and 2 posts in transaction`);
     });
@@ -173,7 +176,11 @@ async function main() {
         metadata: { automated: true, reason: "cleanup" },
       },
       async () => {
-        await db.update(posts).set({ status: "archived" }).where(eq(posts.status, "draft"));
+        await db
+          .update(posts)
+          .set({ status: "archived" })
+          .where(eq(posts.status, "draft"))
+          .returning();
         console.log(`   ✓ Archived draft posts with SYSTEM context`);
       },
     );
