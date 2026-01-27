@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { pgTable, serial, text, varchar } from "drizzle-orm/pg-core";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { Client } from "pg";
 import { createAuditLogger, createAuditTableSQL } from "../src/index.js";
 
