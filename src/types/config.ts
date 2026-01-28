@@ -59,6 +59,38 @@ export interface AuditConfig {
    * @default false
    */
   captureDeletedValues?: boolean;
+
+  /**
+   * Custom writer function for audit logs
+   * Allows complete control over how audit logs are stored
+   * If provided, the default audit_logs table is not used
+   *
+   * @example
+   * // Custom table with company_id
+   * customWriter: async (logs, context) => {
+   *   await db.insert(myCustomAuditTable).values(
+   *     logs.map(log => ({
+   *       company_id: getCurrentCompany(),
+   *       user_id: context?.userId,
+   *       action: log.action,
+   *       table_name: log.tableName,
+   *       // ... map your custom fields
+   *     }))
+   *   );
+   * }
+   */
+  customWriter?: (
+    logs: Array<{
+      action: string;
+      tableName: string;
+      recordId: string;
+      oldValues?: Record<string, unknown>;
+      newValues?: Record<string, unknown>;
+      changedFields?: string[];
+      metadata?: Record<string, unknown>;
+    }>,
+    context: AuditContext | undefined,
+  ) => Promise<void> | void;
 }
 
 /**
@@ -94,9 +126,12 @@ export interface AuditContext {
 /**
  * Normalized configuration with all defaults applied
  */
-export type NormalizedConfig = Required<Omit<AuditConfig, "getUserId" | "getMetadata">> & {
+export type NormalizedConfig = Required<
+  Omit<AuditConfig, "getUserId" | "getMetadata" | "customWriter">
+> & {
   getUserId: () => string | undefined | Promise<string | undefined>;
   getMetadata: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   captureOldValues: boolean;
   captureDeletedValues: boolean;
+  customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
 };

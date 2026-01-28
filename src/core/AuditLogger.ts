@@ -16,6 +16,7 @@ export class AuditLogger {
   private config: NormalizedConfig;
   private contextManager = new AuditContextManager();
   private writer: AuditWriter;
+  private customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
 
   constructor(
     private db: PostgresJsDatabase<any>,
@@ -23,6 +24,7 @@ export class AuditLogger {
   ) {
     this.config = this.normalizeConfig(config);
     this.writer = new AuditWriter(db, this.config);
+    this.customWriter = config.customWriter;
   }
 
   /**
@@ -40,6 +42,7 @@ export class AuditLogger {
       // TODO: Implement in executeWithAudit
       captureOldValues: config.captureOldValues ?? false,
       captureDeletedValues: config.captureDeletedValues ?? false,
+      customWriter: config.customWriter,
     };
   }
 
@@ -79,7 +82,7 @@ export class AuditLogger {
     const records = Array.isArray(insertedRecords) ? insertedRecords : [insertedRecords];
     const logs = createInsertAuditLogs(tableName, records, this.config);
 
-    await this.writer.writeAuditLogs(logs, this.contextManager.getContext());
+    await this.writeAuditLogs(logs);
   }
 
   /**
@@ -96,7 +99,7 @@ export class AuditLogger {
     const after = Array.isArray(afterRecords) ? afterRecords : [afterRecords];
     const logs = createUpdateAuditLogs(tableName, before, after, this.config);
 
-    await this.writer.writeAuditLogs(logs, this.contextManager.getContext());
+    await this.writeAuditLogs(logs);
   }
 
   /**
@@ -111,7 +114,31 @@ export class AuditLogger {
     const records = Array.isArray(deletedRecords) ? deletedRecords : [deletedRecords];
     const logs = createDeleteAuditLogs(tableName, records, this.config);
 
-    await this.writer.writeAuditLogs(logs, this.contextManager.getContext());
+    await this.writeAuditLogs(logs);
+  }
+
+  /**
+   * Internal method to write audit logs (uses custom writer if provided)
+   */
+  private async writeAuditLogs(logs: any[]): Promise<void> {
+    if (logs.length === 0) return;
+
+    const context = this.contextManager.getContext();
+
+    try {
+      if (this.customWriter) {
+        // Use custom writer
+        await this.customWriter(logs, context);
+      } else {
+        // Use default writer
+        await this.writer.writeAuditLogs(logs, context);
+      }
+    } catch (error) {
+      if (this.config.strictMode) {
+        throw error;
+      }
+      console.error("Failed to write audit logs:", error);
+    }
   }
 
   /**
@@ -183,6 +210,6 @@ export class AuditLogger {
       metadata: entry.metadata,
     };
 
-    await this.writer.writeAuditLogs([log], this.contextManager.getContext());
+    await this.writeAuditLogs([log]);
   }
 }
