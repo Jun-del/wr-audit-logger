@@ -1,4 +1,4 @@
-# audit-logger
+# wr-audit-logger
 
 Automatic audit logging for **Drizzle ORM + PostgreSQL**.
 Track who changed what and when — **without manual logging calls**.
@@ -6,11 +6,11 @@ Track who changed what and when — **without manual logging calls**.
 ## Installation
 
 ```bash
-pnpm add audit-logger
+pnpm add wr-audit-logger
 # or
-npm install audit-logger
+npm install wr-audit-logger
 # or
-yarn add audit-logger
+yarn add wr-audit-logger
 ```
 
 ## Quick Start

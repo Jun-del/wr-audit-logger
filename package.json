@@ -25,7 +25,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "ci": "pnpm run build && pnpm run fmt:check && pnpm run typecheck && pnpm run test",
+    "ci": "pnpm run build && pnpm run format:check && pnpm run typecheck && pnpm run test",
     "coverage": "vitest run --coverage",
     "dev": "tsdown --watch",
     "format": "oxfmt",
@@ -35,6 +35,7 @@
     "local-release": "changeset version && changeset publish",
     "prepare": "husky",
     "prepublishOnly": "npm run ci",
+    "test": "vitest run",
     "test:full-flow": "dotenvx run -- tsx scripts/test-full-flow.ts",
     "typecheck": "tsc --noEmit"
   },
