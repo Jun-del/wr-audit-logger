@@ -279,21 +279,13 @@ async function executeWithAudit(
   let beforeState: any[] = [];
 
   try {
-    // For UPDATE/DELETE, capture the "before" state if configured
-    if (operation === "update" || operation === "delete") {
-      const shouldCapture =
-        (operation === "update" && auditLogger.shouldCaptureOldValues()) ||
-        (operation === "delete" && auditLogger.shouldCaptureDeletedValues());
-
-      if (shouldCapture) {
-        beforeState = await captureBeforeState(tableName, queryBuilder, db, tableRef);
-      } else {
-        debug(`Skipping before state capture for ${operation} (not configured)`);
-      }
+    // For UPDATE only, capture the "before" state if configured
+    if (operation === "update" && auditLogger.shouldCaptureOldValues()) {
+      beforeState = await captureBeforeState(tableName, queryBuilder, db, tableRef);
     }
 
     // Execute the actual operation
-    // originalExecute might be a function that returns a promise, or the original method
+    // For DELETE, we rely on .returning() which is auto-injected
     let result;
     if (typeof originalExecute === "function" && originalExecute.length === 0) {
       // It's a wrapper function we created
@@ -398,13 +390,13 @@ async function createAuditLogs(
       break;
 
     case "delete":
-      // For delete, only log if we captured beforeState
-      // If captureDeletedValues is false, beforeState will be empty and we skip logging
-      if (beforeState.length > 0) {
-        debug(`Logging ${beforeState.length} DELETE operations`);
-        await auditLogger.logDelete(tableName, beforeState);
+      // For DELETE, we use data from .returning() which is auto-injected
+      // The deleted data is in the result
+      if (records.length > 0) {
+        debug(`Logging ${records.length} DELETE operations`);
+        await auditLogger.logDelete(tableName, records);
       } else {
-        debug("Skipping DELETE audit: captureDeletedValues is disabled or no records matched");
+        debug("Skipping DELETE audit: no records matched or returned");
       }
       break;
   }

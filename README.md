@@ -20,7 +20,7 @@ yarn add audit-logger
 ```ts
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { createAuditTableSQL } from "@white-room/audit-logger";
+import { createAuditTableSQL } from "audit-logger";
 
 const client = postgres(process.env.DATABASE_URL);
 const db = drizzle(client);
@@ -49,7 +49,7 @@ const { db: auditedDb } = auditLogger;
 #### Example: Express middleware
 
 ```ts
-app.use((req, res, next) = {
+app.use((req, res, next) => {
   auditLogger.setContext({
     userId: req.user?.id,
     ipAddress: req.ip,
@@ -71,7 +71,7 @@ import { Hono } from "hono";
 
 const app = new Hono();
 
-app.use("*", async (c, next) = {
+app.use("*", async (c, next) => {
   auditLogger.setContext({
     userId: c.get("user")?.id,
     ipAddress: c.req.header("x-forwarded-for") || c.req.raw.headers.get("x-forwarded-for"),
@@ -95,7 +95,7 @@ const t = initTRPC.context<{
   req: { user?: { id?: string }; ip?: string; headers?: Record<string, string> };
 }>().create();
 
-const auditContext = t.middleware(({ ctx, next }) = {
+const auditContext = t.middleware(({ ctx, next }) => {
   auditLogger.setContext({
     userId: ctx.req.user?.id,
     ipAddress: ctx.req.ip,
@@ -163,7 +163,7 @@ interface AuditConfig {
   tables: string[] | "*";
 
   // Specific fields per table (optional)
-  fields?: Record<string, string[];
+  fields?: Record<string, string[]>;
 
   // Fields to exclude globally
   excludeFields?: string[];
@@ -178,7 +178,32 @@ interface AuditConfig {
   getUserId?: () => string | undefined | Promise<string | undefined;
 
   // Resolve additional metadata
-  getMetadata?: () => Record<string, unknown | Promise<Record<string, unknown;
+  getMetadata?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+  // Whether to capture "before" values for UPDATE operations
+  captureOldValues?: boolean;
+
+  // Custom writer to store audit logs in your own table
+  customWriter?: (
+    logs: Array<{
+      action: string;
+      tableName: string;
+      recordId: string;
+      oldValues?: Record<string, unknown>;
+      newValues?: Record<string, unknown>;
+      changedFields?: string[];
+      metadata?: Record<string, unknown>;
+    }>,
+    context: AuditContext | undefined,
+  ) => Promise<void> | void;
+}
+
+interface AuditContext {
+  userId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  metadata?: Record<string, unknown>;
+  transactionId?: string;
 }
 ```
 

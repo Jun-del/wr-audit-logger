@@ -40,7 +40,6 @@ export class AuditLogger {
       getUserId: config.getUserId || (() => undefined),
       getMetadata: config.getMetadata || (() => ({})),
       captureOldValues: config.captureOldValues ?? false,
-      captureDeletedValues: config.captureDeletedValues ?? false,
       customWriter: config.customWriter,
     };
   }
@@ -75,14 +74,6 @@ export class AuditLogger {
    */
   shouldCaptureOldValues(): boolean {
     return this.config.captureOldValues;
-  }
-
-  /**
-   * Check if deleted values should be captured for DELETE operations
-   * Exposed for use by interceptor
-   */
-  shouldCaptureDeletedValues(): boolean {
-    return this.config.captureDeletedValues;
   }
 
   /**

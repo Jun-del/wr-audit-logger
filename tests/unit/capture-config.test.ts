@@ -53,7 +53,7 @@ describe("Capture Configuration", () => {
     it("should capture old values when enabled", async () => {
       const auditLogger = createAuditLogger(originalDb, {
         tables: ["config_test_users"],
-        captureOldValues: true, // Explicitly enabled
+        captureOldValues: true,
       });
 
       const { db, setContext } = auditLogger;
@@ -66,11 +66,7 @@ describe("Capture Configuration", () => {
         .returning();
 
       // Update the user
-      await db
-        .update(testUsers)
-        .set({ name: "Updated Name" })
-        .where(eq(testUsers.id, user.id))
-        .returning();
+      await db.update(testUsers).set({ name: "Updated Name" }).where(eq(testUsers.id, user.id));
 
       // Check audit log
       const logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.action, "UPDATE"));
@@ -84,7 +80,7 @@ describe("Capture Configuration", () => {
     it("should NOT capture old values when disabled (default)", async () => {
       const auditLogger = createAuditLogger(originalDb, {
         tables: ["config_test_users"],
-        captureOldValues: false, // Disabled
+        captureOldValues: false, // Default
       });
 
       const { db, setContext } = auditLogger;
@@ -97,11 +93,7 @@ describe("Capture Configuration", () => {
         .returning();
 
       // Update the user
-      await db
-        .update(testUsers)
-        .set({ name: "Updated Name" })
-        .where(eq(testUsers.id, user.id))
-        .returning();
+      await db.update(testUsers).set({ name: "Updated Name" }).where(eq(testUsers.id, user.id));
 
       // Check audit log
       const logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.action, "UPDATE"));
@@ -113,11 +105,10 @@ describe("Capture Configuration", () => {
     });
   });
 
-  describe("captureDeletedValues configuration", () => {
-    it("should capture deleted values when enabled", async () => {
+  describe("DELETE operations (always logged via .returning())", () => {
+    it("should always capture deleted data using auto-injected .returning()", async () => {
       const auditLogger = createAuditLogger(originalDb, {
         tables: ["config_test_users"],
-        captureDeletedValues: true, // Explicitly enabled
       });
 
       const { db, setContext } = auditLogger;
@@ -126,10 +117,12 @@ describe("Capture Configuration", () => {
       // Insert a user
       const [user] = await db
         .insert(testUsers)
-        .values({ email: "test@example.com", name: "To Be Deleted" })
+        .values({ email: "delete@example.com", name: "To Be Deleted" })
         .returning();
 
-      // Delete the user
+      await originalDb.execute("DELETE FROM audit_logs");
+
+      // Delete the user - .returning() is auto-injected
       await db.delete(testUsers).where(eq(testUsers.id, user.id));
 
       // Check audit log
@@ -138,41 +131,33 @@ describe("Capture Configuration", () => {
       expect(logs).toHaveLength(1);
       expect(logs[0].oldValues).toBeDefined();
       expect(logs[0].oldValues).toMatchObject({
-        email: "test@example.com",
+        email: "delete@example.com",
         name: "To Be Deleted",
       });
       expect(logs[0].newValues).toBeNull();
     });
 
-    it("should NOT capture deleted values when disabled (default)", async () => {
+    it("should not create audit log when DELETE matches no records", async () => {
       const auditLogger = createAuditLogger(originalDb, {
         tables: ["config_test_users"],
-        captureDeletedValues: false, // Disabled
       });
 
       const { db, setContext } = auditLogger;
       setContext({ userId: "test-user" });
 
-      // Insert a user
-      const [user] = await db
-        .insert(testUsers)
-        .values({ email: "test@example.com", name: "To Be Deleted" })
-        .returning();
+      // Delete non-existent user
+      await db.delete(testUsers).where(eq(testUsers.id, 99999));
 
-      // Delete the user
-      await db.delete(testUsers).where(eq(testUsers.id, user.id));
-
-      // Check audit log - should not exist since we can't capture what was deleted
+      // Check audit log
       const logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.action, "DELETE"));
 
-      // Without captureDeletedValues, we don't know what to log
+      // Should not create audit log when nothing was deleted
       expect(logs).toHaveLength(0);
     });
   });
 
   describe("Performance benefits", () => {
     it("should skip SELECT query when captureOldValues is false", async () => {
-      // This is more of a documentation test - in practice you'd profile this
       const auditLogger = createAuditLogger(originalDb, {
         tables: ["config_test_users"],
         captureOldValues: false,
@@ -187,17 +172,13 @@ describe("Capture Configuration", () => {
         .returning();
 
       // This update won't trigger a SELECT before the UPDATE
-      // In high-volume scenarios, this saves a database round-trip
-      await db
-        .update(testUsers)
-        .set({ name: "New Name" })
-        .where(eq(testUsers.id, user.id))
-        .returning();
+      await db.update(testUsers).set({ name: "New Name" }).where(eq(testUsers.id, user.id));
 
       const logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.action, "UPDATE"));
 
       expect(logs).toHaveLength(1);
       expect(logs[0].oldValues).toBeNull();
+      expect(logs[0].newValues).toMatchObject({ name: "New Name" });
     });
   });
 });

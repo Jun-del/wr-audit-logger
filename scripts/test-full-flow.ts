@@ -7,7 +7,7 @@
 // TODO: Handle parallel query, multiple queries running at the same time, batching?
 
 // * Implemented, test the following
-// TODO: Remove returning(), it should not be a requirement; for insert, can we capture the insert values from the proxy?
+// TODO: Remove returning(), it should not be a requirement
 // TODO: Single statement query fails, shouldn't log
 // TODO: Make sure transaction works, test it
 // TODO: Make storing previous value configurable, since we need to query the prev values?

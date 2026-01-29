@@ -54,13 +54,6 @@ export interface AuditConfig {
   captureOldValues?: boolean;
 
   /**
-   * Whether to capture "before" values for DELETE operations
-   * Disabling this skips the additional SELECT query before deletes
-   * @default false
-   */
-  captureDeletedValues?: boolean;
-
-  /**
    * Custom writer function for audit logs
    * Allows complete control over how audit logs are stored
    * If provided, the default audit_logs table is not used
@@ -132,6 +125,5 @@ export type NormalizedConfig = Required<
   getUserId: () => string | undefined | Promise<string | undefined>;
   getMetadata: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   captureOldValues: boolean;
-  captureDeletedValues: boolean;
   customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
 };
