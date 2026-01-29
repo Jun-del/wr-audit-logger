@@ -7,17 +7,17 @@
 // TODO: Handle parallel query, multiple queries running at the same time, batching?
 
 // * Implemented, test the following
-// TODO: Remove returning(), it should not be a requirement
+// TODO: Automated returning(), it should not be a requirement
 // TODO: Single statement query fails, shouldn't log
 // TODO: Make sure transaction works, test it
 // TODO: Make storing previous value configurable, since we need to query the prev values?
-// TODO: Make action table column configurable, we want support view/read, and it is not CUD database operation; User may use the manual function to log like logRead
+// TODO: Make action table column configurable; we want support view/read, and it is not CUD database operation; User may use the manual function to log like logRead
 
 // * Misc, not important, do when project is MVP
 // TODO: Give a nice name
 // TODO: Open source it (optional), but build as a package
 // TODO: Try on Greenetrix (no code changes except setting it up)
-// TODO: Query and render on the frontend, pick between ZY and Justin
+// TODO: Query and render on the frontend Justin
 // TODO: Skill sharing (next month) -> talk about lib, how it works, how I vibe code
 
 import { desc, eq } from "drizzle-orm";

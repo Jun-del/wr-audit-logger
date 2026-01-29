@@ -20,7 +20,7 @@ yarn add audit-logger
 ```ts
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { createAuditTableSQL } from "audit-logger";
+import { createAuditTableSQL } from "wr-audit-logger";
 
 const client = postgres(process.env.DATABASE_URL);
 const db = drizzle(client);
@@ -32,7 +32,7 @@ await db.execute(createAuditTableSQL);
 ### 2. Create an audit logger (wraps your db)
 
 ```ts
-import { createAuditLogger } from "audit-logger";
+import { createAuditLogger } from "wr-audit-logger";
 
 const auditLogger = createAuditLogger(db, {
   tables: ["users", "vehicles"],
@@ -91,9 +91,11 @@ app.use("*", async (c, next) => {
 ```ts
 import { initTRPC } from "@trpc/server";
 
-const t = initTRPC.context<{
-  req: { user?: { id?: string }; ip?: string; headers?: Record<string, string> };
-}>().create();
+const t = initTRPC
+  .context<{
+    req: { user?: { id?: string }; ip?: string; headers?: Record<string, string> };
+  }>()
+  .create();
 
 const auditContext = t.middleware(({ ctx, next }) => {
   auditLogger.setContext({
@@ -284,7 +286,7 @@ await auditedDb.transaction(async (tx) => {
 ## Querying Audit Logs
 
 ```ts
-import { auditLogs } from "audit-logger";
+import { auditLogs } from "wr-audit-logger";
 import { eq, desc } from "drizzle-orm";
 
 // History for a specific record

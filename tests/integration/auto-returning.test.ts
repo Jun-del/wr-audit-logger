@@ -164,10 +164,9 @@ describe("Automatic .returning() Injection", () => {
   });
 
   describe("DELETE without .returning()", () => {
-    it("should automatically capture deleted data when captureDeletedValues is true", async () => {
+    it("should automatically capture deleted data", async () => {
       const auditLogger = createAuditLogger(originalDb, {
         tables: ["auto_returning_test_users"],
-        captureDeletedValues: true,
       });
 
       const { db, setContext } = auditLogger;
@@ -191,32 +190,6 @@ describe("Automatic .returning() Injection", () => {
         email: "delete@example.com",
         name: "To Delete",
       });
-    });
-
-    it("should not create audit log when captureDeletedValues is false", async () => {
-      const auditLogger = createAuditLogger(originalDb, {
-        tables: ["auto_returning_test_users"],
-        captureDeletedValues: false,
-      });
-
-      const { db, setContext } = auditLogger;
-      setContext({ userId: "test-user" });
-
-      // Insert a user
-      const [user] = await db
-        .insert(testUsers)
-        .values({ email: "delete@example.com", name: "To Delete" })
-        .returning();
-
-      await originalDb.execute("DELETE FROM audit_logs");
-
-      // Delete WITHOUT .returning()
-      await db.delete(testUsers).where(eq(testUsers.id, user.id));
-
-      const logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.action, "DELETE"));
-
-      // Should not create audit log when captureDeletedValues is false
-      expect(logs).toHaveLength(0);
     });
   });
 

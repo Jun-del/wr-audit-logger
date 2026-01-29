@@ -1,5 +1,5 @@
 {
-  "name": "@white-room/audit-logger",
+  "name": "wr-audit-logger",
   "version": "0.0.1",
   "description": "Automatic audit logging for PostgreSQL",
   "keywords": [],
@@ -35,10 +35,7 @@
     "local-release": "changeset version && changeset publish",
     "prepare": "husky",
     "prepublishOnly": "npm run ci",
-    "test": "vitest run",
     "test:full-flow": "dotenvx run -- tsx scripts/test-full-flow.ts",
-    "test:integration": "dotenvx run -- vitest run tests/integration",
-    "test:ui": "vitest --ui",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

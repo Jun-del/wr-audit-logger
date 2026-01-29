@@ -122,7 +122,13 @@ describe("AuditLogger", () => {
       expect(executeMock).toHaveBeenCalled();
     });
 
-    it("should not log update if nothing changed", async () => {
+    it("should not log update if nothing changed when capturing old values", async () => {
+      auditLogger = new AuditLogger(mockDb, {
+        tables: ["users", "vehicles"],
+        excludeFields: ["password"],
+        captureOldValues: true,
+      });
+
       const record = { id: 1, name: "Same", email: "same@example.com" };
 
       await auditLogger.logUpdate("users", record, record);
