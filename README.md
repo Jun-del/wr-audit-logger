@@ -173,17 +173,27 @@ interface AuditConfig {
   // Audit table name (default: audit_logs)
   auditTable?: string;
 
-  // Fail the DB operation if audit logging fails
+  // Fail the DB operation if audit logging fails (default: false)
   strictMode?: boolean;
 
   // Resolve current user id
-  getUserId?: () => string | undefined | Promise<string | undefined;
+  getUserId?: () => string | undefined | Promise<string | undefined>;
 
   // Resolve additional metadata
   getMetadata?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
 
   // Whether to capture "before" values for UPDATE operations
   captureOldValues?: boolean;
+
+  // Batch configuration for async writes (disabled by default)
+  batch?: {
+    // Max logs per batch (default: 100)
+    batchSize?: number;
+    // Flush interval in ms (default: 1000)
+    flushInterval?: number;
+    // If true, wait for writes before returning (default: false)
+    waitForWrite?: boolean;
+  };
 
   // Custom writer to store audit logs in your own table
   customWriter?: (
@@ -208,6 +218,14 @@ interface AuditContext {
   transactionId?: string;
 }
 ```
+
+Defaults (if omitted):
+
+- `excludeFields`: `["password", "token", "secret", "apiKey"]`
+- `auditTable`: `"audit_logs"`
+- `strictMode`: `false`
+- `captureOldValues`: `false` (avoids an extra SELECT before UPDATE)
+- `batch`: disabled (writes immediately)
 
 ## Examples
 
@@ -310,8 +328,8 @@ const activity = await auditedDb
 
 - [x] Phase 1 — Manual audit logging
 - [x] Phase 2 — Automatic interception (current)
-- [ ] Phase 3 — Async / batched writes
-- [ ] Phase 4 — ORM adapters (Prisma, TypeORM)
+- [x] Phase 3 — Async / batched writes
+- [ ] Phase 4 — ORM adapters
 
 ## Contributing
 
