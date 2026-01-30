@@ -95,6 +95,22 @@ export function createAuditLogger(db: PostgresJsDatabase<any>, config: AuditConf
      * });
      */
     log: logger.log.bind(logger),
+
+    /**
+     * Manually flush pending batch logs (only works with batch mode)
+     */
+    flush: logger.flush.bind(logger),
+
+    /**
+     * Gracefully shutdown the audit logger
+     * Flushes all pending logs before shutting down
+     */
+    shutdown: logger.shutdown.bind(logger),
+
+    /**
+     * Get batch writer stats (only available in batch mode)
+     */
+    getStats: logger.getStats.bind(logger),
   };
 }
 

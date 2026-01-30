@@ -4,6 +4,8 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createDeleteAuditLogs } from "../capture/delete.js";
 import { createInsertAuditLogs } from "../capture/insert.js";
 import { createUpdateAuditLogs } from "../capture/update.js";
+import { BatchAuditWriter } from "../storage/batch-writer.js";
+import { BatchedCustomWriter } from "../storage/batched-custom-writer.js";
 import { AuditWriter } from "../storage/writer.js";
 import { AuditContextManager } from "./context.js";
 import { createInterceptedDb } from "./interceptor.js";
@@ -15,7 +17,9 @@ import { createInterceptedDb } from "./interceptor.js";
 export class AuditLogger {
   private config: NormalizedConfig;
   private contextManager = new AuditContextManager();
-  private writer: AuditWriter;
+  private writer: AuditWriter | null = null;
+  private batchWriter: BatchAuditWriter | null = null;
+  private batchedCustomWriter: BatchedCustomWriter | null = null;
   private customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
 
   constructor(
@@ -23,14 +27,46 @@ export class AuditLogger {
     config: AuditConfig,
   ) {
     this.config = this.normalizeConfig(config);
-    this.writer = new AuditWriter(db, this.config);
     this.customWriter = config.customWriter;
+
+    // Initialize appropriate writer
+    if (this.config.batch && config.customWriter) {
+      // Use batched custom writer
+      this.batchedCustomWriter = new BatchedCustomWriter(config.customWriter, {
+        batchSize: this.config.batch.batchSize,
+        flushInterval: this.config.batch.flushInterval,
+        strictMode: this.config.strictMode,
+        waitForWrite: this.config.batch.waitForWrite,
+      });
+    } else if (this.config.batch) {
+      // Use batch writer (standard)
+      this.batchWriter = new BatchAuditWriter(db, {
+        auditTable: this.config.auditTable,
+        batchSize: this.config.batch.batchSize,
+        flushInterval: this.config.batch.flushInterval,
+        strictMode: this.config.strictMode,
+        getUserId: this.config.getUserId,
+        getMetadata: this.config.getMetadata,
+        waitForWrite: this.config.batch.waitForWrite,
+      });
+    } else {
+      // Use immediate writer
+      this.writer = new AuditWriter(db, this.config);
+    }
   }
 
   /**
    * Normalize configuration with defaults
    */
   private normalizeConfig(config: AuditConfig): NormalizedConfig {
+    const batchConfig = config.batch
+      ? {
+          batchSize: config.batch.batchSize ?? 100,
+          flushInterval: config.batch.flushInterval ?? 1000,
+          waitForWrite: config.batch.waitForWrite ?? false,
+        }
+      : null;
+
     return {
       tables: config.tables,
       fields: config.fields || {},
@@ -40,6 +76,7 @@ export class AuditLogger {
       getUserId: config.getUserId || (() => undefined),
       getMetadata: config.getMetadata || (() => ({})),
       captureOldValues: config.captureOldValues ?? false,
+      batch: batchConfig,
       customWriter: config.customWriter,
     };
   }
@@ -132,11 +169,35 @@ export class AuditLogger {
     const context = this.contextManager.getContext();
 
     try {
-      if (this.customWriter) {
-        // Use custom writer
+      if (this.batchedCustomWriter) {
+        // Use batched custom writer
+        const writePromise = this.batchedCustomWriter.queueAuditLogs(logs, context);
+
+        // Wait for write if configured
+        if (this.config.batch?.waitForWrite || this.config.strictMode) {
+          await writePromise;
+        } else {
+          writePromise.catch((error) => {
+            console.error("Failed to write audit logs:", error);
+          });
+        }
+      } else if (this.customWriter) {
+        // Use custom writer (immediate - no batching)
         await this.customWriter(logs, context);
-      } else {
-        // Use default writer
+      } else if (this.batchWriter) {
+        // Use batch writer (standard)
+        const writePromise = this.batchWriter.queueAuditLogs(logs, context);
+
+        // Wait for write if configured
+        if (this.config.batch?.waitForWrite || this.config.strictMode) {
+          await writePromise;
+        } else {
+          writePromise.catch((error) => {
+            console.error("Failed to write audit logs:", error);
+          });
+        }
+      } else if (this.writer) {
+        // Use immediate writer (standard)
         await this.writer.writeAuditLogs(logs, context);
       }
     } catch (error) {
@@ -217,5 +278,49 @@ export class AuditLogger {
     };
 
     await this.writeAuditLogs([log]);
+  }
+
+  /**
+   * Manually flush pending batch logs (only works with batch mode)
+   */
+  async flush(): Promise<void> {
+    if (this.batchWriter) {
+      await this.batchWriter.flush();
+    }
+    if (this.batchedCustomWriter) {
+      await this.batchedCustomWriter.flush();
+    }
+  }
+
+  /**
+   * Gracefully shutdown the audit logger
+   * Flushes all pending logs before shutting down
+   */
+  async shutdown(): Promise<void> {
+    if (this.batchWriter) {
+      await this.batchWriter.shutdown();
+    }
+    if (this.batchedCustomWriter) {
+      await this.batchedCustomWriter.shutdown();
+    }
+  }
+
+  /**
+   * Get batch writer stats (only available in batch mode)
+   */
+  getStats():
+    | {
+        queueSize: number;
+        isWriting: boolean;
+        isShuttingDown: boolean;
+      }
+    | undefined {
+    if (this.batchWriter) {
+      return this.batchWriter.getStats();
+    }
+    if (this.batchedCustomWriter) {
+      return this.batchedCustomWriter.getStats();
+    }
+    return undefined;
   }
 }

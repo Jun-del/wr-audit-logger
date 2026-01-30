@@ -37,6 +37,7 @@
     "prepare": "husky",
     "prepublishOnly": "npm run ci",
     "test": "vitest run",
+    "test:batch": "dotenvx run -- tsx scripts/batch.ts",
     "test:full-flow": "dotenvx run -- tsx scripts/test-full-flow.ts",
     "test:integration": "dotenvx run -- vitest run tests/integration",
     "test:unit": "vitest run tests/unit",

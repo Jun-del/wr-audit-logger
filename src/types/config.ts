@@ -54,6 +54,13 @@ export interface AuditConfig {
   captureOldValues?: boolean;
 
   /**
+   * Batch configuration for async writes
+   * When enabled, audit logs are queued and written in batches
+   * @default undefined (disabled - writes immediately)
+   */
+  batch?: BatchConfig;
+
+  /**
    * Custom writer function for audit logs
    * Allows complete control over how audit logs are stored
    * If provided, the default audit_logs table is not used
@@ -84,6 +91,32 @@ export interface AuditConfig {
     }>,
     context: AuditContext | undefined,
   ) => Promise<void> | void;
+}
+
+/**
+ * Configuration for batched audit log writes
+ */
+export interface BatchConfig {
+  /**
+   * Maximum number of logs to batch before automatic flush
+   * @default 100
+   */
+  batchSize?: number;
+
+  /**
+   * Interval in milliseconds to automatically flush pending logs
+   * @default 1000 (1 second)
+   */
+  flushInterval?: number;
+
+  /**
+   * If true, waits for batches to be written before returning
+   * If false, queues logs asynchronously (fire-and-forget)
+   * @default false (async mode)
+   * @note This is independent of strictMode - you can have async batching
+   *       with strict error handling by setting both to true
+   */
+  waitForWrite?: boolean;
 }
 
 /**
@@ -120,10 +153,11 @@ export interface AuditContext {
  * Normalized configuration with all defaults applied
  */
 export type NormalizedConfig = Required<
-  Omit<AuditConfig, "getUserId" | "getMetadata" | "customWriter">
+  Omit<AuditConfig, "getUserId" | "getMetadata" | "customWriter" | "batch">
 > & {
   getUserId: () => string | undefined | Promise<string | undefined>;
   getMetadata: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   captureOldValues: boolean;
+  batch: Required<BatchConfig> | null;
   customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
 };
