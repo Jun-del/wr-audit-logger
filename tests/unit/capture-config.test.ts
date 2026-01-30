@@ -108,6 +108,46 @@ describe("Capture Configuration (Unit Tests)", () => {
       expect(logs[0].oldValues?.name).toBe("Old Name");
       expect(logs[0].newValues?.name).toBe("New Name");
     });
+
+    it("should log new values when before state is missing", () => {
+      const afterRecords = [{ id: 1, email: "new@example.com", name: "New Name" }];
+
+      const logs = createUpdateAuditLogs("test_users", [], afterRecords, mockConfig);
+
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({
+        action: "UPDATE",
+        tableName: "test_users",
+        recordId: "1",
+        oldValues: undefined,
+        newValues: {
+          id: 1,
+          email: "new@example.com",
+          name: "New Name",
+        },
+        changedFields: undefined,
+      });
+    });
+
+    it("should mix old+new and new-only logs when partial before state is missing", () => {
+      const beforeRecords = [{ id: 1, email: "old@example.com", name: "Old Name" }];
+      const afterRecords = [
+        { id: 1, email: "new@example.com", name: "New Name" },
+        { id: 2, email: "missing@example.com", name: "Missing Before" },
+      ];
+
+      const logs = createUpdateAuditLogs("test_users", beforeRecords, afterRecords, mockConfig);
+
+      expect(logs).toHaveLength(2);
+
+      const logWithBefore = logs.find((log) => log.recordId === "1");
+      const logWithoutBefore = logs.find((log) => log.recordId === "2");
+
+      expect(logWithBefore?.oldValues).toBeDefined();
+      expect(logWithBefore?.changedFields).toEqual(["email", "name"]);
+      expect(logWithoutBefore?.oldValues).toBeUndefined();
+      expect(logWithoutBefore?.changedFields).toBeUndefined();
+    });
   });
 
   describe("UPDATE capture with captureOldValues=false", () => {

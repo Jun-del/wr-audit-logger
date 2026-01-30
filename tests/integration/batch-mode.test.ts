@@ -3,10 +3,14 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { pgTable, serial, text, varchar } from "drizzle-orm/pg-core";
 import { Client } from "pg";
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { createAuditLogger, createAuditTableSQL, auditLogs } from "../../src/index.js";
+import { createAuditLogger, auditLogs } from "../../src/index.js";
+
+// Use unique table name per run to avoid stale data collisions
+const TEST_ID = `batch_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+const USERS_TABLE = `batch_test_users_${TEST_ID}`;
 
 // Test schema
-const testUsers = pgTable("batch_test_users", {
+const testUsers = pgTable(USERS_TABLE, {
   id: serial("id").primaryKey(),
   email: varchar("email", { length: 255 }).notNull(),
   name: text("name"),
@@ -26,11 +30,10 @@ describe("Batch Mode Integration", () => {
     await client.connect();
     originalDb = drizzle(client);
 
-    // Create audit table and test table
-    await originalDb.execute(createAuditTableSQL);
+    // Create test table
     await originalDb.execute(`
-      DROP TABLE IF EXISTS batch_test_users CASCADE;
-      CREATE TABLE batch_test_users (
+      DROP TABLE IF EXISTS "${USERS_TABLE}" CASCADE;
+      CREATE TABLE "${USERS_TABLE}" (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) NOT NULL,
         name TEXT
@@ -39,19 +42,20 @@ describe("Batch Mode Integration", () => {
   });
 
   afterAll(async () => {
-    await originalDb.execute("DROP TABLE IF EXISTS batch_test_users CASCADE");
+    await originalDb.execute(`DELETE FROM audit_logs WHERE table_name = '${USERS_TABLE}'`);
+    await originalDb.execute(`DROP TABLE IF EXISTS "${USERS_TABLE}" CASCADE`);
     await client.end();
   });
 
   beforeEach(async () => {
-    await originalDb.execute("DELETE FROM batch_test_users");
-    await originalDb.execute("DELETE FROM audit_logs WHERE table_name = 'batch_test_users'");
+    await originalDb.execute(`DELETE FROM "${USERS_TABLE}"`);
+    await originalDb.execute(`DELETE FROM audit_logs WHERE table_name = '${USERS_TABLE}'`);
   });
 
   describe("Basic batching", () => {
     it("should queue and batch multiple operations", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 5,
           flushInterval: 5000, // High interval to test manual flush
@@ -76,17 +80,14 @@ describe("Batch Mode Integration", () => {
       let logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(0);
 
       // Manually flush
       await auditLogger.flush();
 
       // Now logs should be in database
-      logs = await originalDb
-        .select()
-        .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+      logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(3);
 
       // Queue should be empty
@@ -98,7 +99,7 @@ describe("Batch Mode Integration", () => {
 
     it("should auto-flush when batch size is reached", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 3, // Small batch size
           flushInterval: 10000,
@@ -118,7 +119,7 @@ describe("Batch Mode Integration", () => {
       const logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(3);
 
       await auditLogger.shutdown();
@@ -126,7 +127,7 @@ describe("Batch Mode Integration", () => {
 
     it("should auto-flush based on time interval", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 200, // 200ms
@@ -148,7 +149,7 @@ describe("Batch Mode Integration", () => {
       const logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(2);
 
       await auditLogger.shutdown();
@@ -158,7 +159,7 @@ describe("Batch Mode Integration", () => {
   describe("waitForWrite configuration", () => {
     it("should wait for write when waitForWrite is true", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 10000,
@@ -179,7 +180,7 @@ describe("Batch Mode Integration", () => {
       const logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(1);
       expect(logs[0].newValues).toMatchObject({
         email: "sync@example.com",
@@ -191,7 +192,7 @@ describe("Batch Mode Integration", () => {
 
     it("should not wait for write when waitForWrite is false (async mode)", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 10000,
@@ -209,7 +210,7 @@ describe("Batch Mode Integration", () => {
       const logsBefore = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
 
       // Manually flush and wait
       await auditLogger.flush();
@@ -218,7 +219,7 @@ describe("Batch Mode Integration", () => {
       const logsAfter = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logsAfter).toHaveLength(1);
 
       await auditLogger.shutdown();
@@ -228,7 +229,7 @@ describe("Batch Mode Integration", () => {
   describe("Graceful shutdown", () => {
     it("should flush all pending logs on shutdown", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 60000, // Very high interval
@@ -252,23 +253,20 @@ describe("Batch Mode Integration", () => {
       let logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs.length).toBeLessThan(5); // Might be 0 if very fast
 
       // Shutdown should flush
       await auditLogger.shutdown();
 
       // All logs should be written now
-      logs = await originalDb
-        .select()
-        .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+      logs = await originalDb.select().from(auditLogs).where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(5);
     });
 
     it("should handle multiple shutdown calls gracefully", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 10000,
@@ -288,13 +286,13 @@ describe("Batch Mode Integration", () => {
       const logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs).toHaveLength(1);
     });
 
     it("should reject new operations after shutdown", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 10000,
@@ -320,7 +318,7 @@ describe("Batch Mode Integration", () => {
     it("should be faster than immediate mode for bulk operations", async () => {
       // Immediate mode
       const immediateLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         // No batch config - immediate writes
       });
 
@@ -335,12 +333,12 @@ describe("Batch Mode Integration", () => {
       }
       const immediateDuration = Date.now() - immediateStart;
 
-      await originalDb.execute("DELETE FROM batch_test_users");
-      await originalDb.execute("DELETE FROM audit_logs WHERE table_name = 'batch_test_users'");
+      await originalDb.execute(`DELETE FROM "${USERS_TABLE}"`);
+      await originalDb.execute(`DELETE FROM audit_logs WHERE table_name = '${USERS_TABLE}'`);
 
       // Batch mode
       const batchLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 10,
           flushInterval: 10000,
@@ -375,7 +373,7 @@ describe("Batch Mode Integration", () => {
   describe("Error handling in batch mode", () => {
     it("should handle individual log failures in non-strict mode", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         strictMode: false,
         batch: {
           batchSize: 5,
@@ -395,7 +393,7 @@ describe("Batch Mode Integration", () => {
       const logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs.length).toBeGreaterThan(0);
 
       await auditLogger.shutdown();
@@ -403,7 +401,7 @@ describe("Batch Mode Integration", () => {
 
     it("should fail operations in strict mode when audit fails", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         strictMode: true,
         batch: {
           batchSize: 5,
@@ -422,7 +420,7 @@ describe("Batch Mode Integration", () => {
       const logs = await originalDb
         .select()
         .from(auditLogs)
-        .where(eq(auditLogs.tableName, "batch_test_users"));
+        .where(eq(auditLogs.tableName, USERS_TABLE));
       expect(logs.length).toBeGreaterThan(0);
 
       await auditLogger.shutdown();
@@ -432,7 +430,7 @@ describe("Batch Mode Integration", () => {
   describe("Stats and monitoring", () => {
     it("should provide accurate queue stats", async () => {
       const auditLogger = createAuditLogger(originalDb, {
-        tables: ["batch_test_users"],
+        tables: [USERS_TABLE],
         batch: {
           batchSize: 100,
           flushInterval: 60000,

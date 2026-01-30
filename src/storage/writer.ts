@@ -28,7 +28,7 @@ export class AuditWriter {
         userId: userId || context?.userId,
         ipAddress: context?.ipAddress,
         userAgent: context?.userAgent,
-        metadata: { ...metadata, ...context?.metadata },
+        metadata: { ...metadata, ...context?.metadata, ...log.metadata },
         transactionId: context?.transactionId,
       }));
 

@@ -1,15 +1,4 @@
-import {
-  bigserial,
-  index,
-  jsonb,
-  pgEnum,
-  pgTable,
-  text,
-  timestamp,
-  varchar,
-} from "drizzle-orm/pg-core";
-
-export const auditAction = pgEnum("audit_action", ["INSERT", "UPDATE", "DELETE"]);
+import { bigserial, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 /**
  * Audit logs table schema
@@ -26,10 +15,8 @@ export const auditLogs = pgTable(
     ipAddress: varchar("ip_address", { length: 45 }), // IPv6 compatible
     userAgent: text("user_agent"),
 
-    // TODO: Support custom action types (varchar) or strictly db actions (ENUM)?
     // What action was performed
-    action: auditAction("action").notNull(),
-    // action: varchar("action", { length: 20 }).notNull(),
+    action: varchar("action", { length: 255 }).notNull(),
     tableName: varchar("table_name", { length: 255 }).notNull(),
     recordId: varchar("record_id", { length: 255 }).notNull(),
 
@@ -75,7 +62,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   ip_address VARCHAR(45),
   user_agent TEXT,
   
-  action VARCHAR(20) NOT NULL CHECK (action IN ('INSERT', 'UPDATE', 'DELETE')),
+  action VARCHAR(255) NOT NULL,
   table_name VARCHAR(255) NOT NULL,
   record_id VARCHAR(255) NOT NULL,
   
@@ -92,6 +79,10 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 ALTER SEQUENCE audit_logs_id_seq OWNED BY audit_logs.id;
+
+-- Ensure custom actions are allowed when table already exists
+ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_action_check;
+ALTER TABLE audit_logs ALTER COLUMN action TYPE VARCHAR(255);
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_table_record ON audit_logs(table_name, record_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id) WHERE user_id IS NOT NULL;

@@ -25,7 +25,7 @@ import { createAuditTableSQL } from "wr-audit-logger";
 const client = postgres(process.env.DATABASE_URL);
 const db = drizzle(client);
 
-// Run once to create the audit_logs table
+// Run once to create or update the audit_logs table
 await db.execute(createAuditTableSQL);
 ```
 
@@ -130,32 +130,11 @@ await auditedDb.delete(users).where(eq(users.id, 1));
 
 **No manual audit calls needed!** The audit logger automatically intercepts operations and creates audit logs.
 
-## 🎉 No `.returning()` Required!
+### Return values (auto-injected `.returning()`)
 
-The audit logger automatically captures data from INSERT, UPDATE, and DELETE operations **without requiring** you to call `.returning()` on every query.
-
-**How it works:**
-
-- If you don't call `.returning()`, the audit logger injects it internally
-- Audit logs are created using the captured data
-- Your code's return value remains unchanged for backward compatibility
-
-**When to use `.returning()`:**
-
-- Only use `.returning()` when **you** need the returned data in your application code
-- The audit logger works whether you use it or not
-
-```typescript
-// Works without .returning()
-await db.insert(users).values({ email: "test@example.com" });
-// Audit log created ✓
-
-// Also works with .returning() when you need the data
-const [user] = await db.insert(users).values({ email: "test@example.com" }).returning();
-// Audit log created ✓ + you get the user object
-```
-
-See [Automatic .returning() Injection](./docs/auto-returning.md) for details.
+For audit capture, `.returning()` is auto-injected for INSERT/UPDATE/DELETE when you don't call it.
+This means the result may be the returned rows even if you didn't explicitly request them.
+If your code relies on non-returning metadata, avoid depending on that behavior while auditing is enabled.
 
 ## Configuration
 
@@ -268,6 +247,19 @@ await auditLogger.withContext(
 ```
 
 All operations inside the callback inherit this context.
+
+### Manual / custom actions
+
+You can log custom actions (e.g., READ, EXPORT) manually:
+
+```ts
+await auditLogger.log({
+  action: "READ",
+  tableName: "sensitive_documents",
+  recordId: docId,
+  metadata: { reason: "user_request" },
+});
+```
 
 ### Transactions
 

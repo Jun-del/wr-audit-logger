@@ -45,28 +45,36 @@ export async function getAuditStats(db: PostgresJsDatabase<any>): Promise<{
   newestLog: Date | null;
 }> {
   const stats = await db.execute(`
-    SELECT 
-      COUNT(*)::int as total_logs,
-      MIN(created_at) as oldest_log,
-      MAX(created_at) as newest_log,
-      jsonb_object_agg(
-        action, 
-        action_count
-      ) as logs_by_action,
-      jsonb_object_agg(
-        table_name, 
-        table_count
-      ) as logs_by_table
-    FROM (
-      SELECT 
-        action,
-        COUNT(*)::int as action_count,
-        table_name,
-        COUNT(*)::int as table_count,
-        created_at
+    WITH base AS (
+      SELECT
+        COUNT(*)::int AS total_logs,
+        MIN(created_at) AS oldest_log,
+        MAX(created_at) AS newest_log
       FROM audit_logs
-      GROUP BY action, table_name, created_at
-    ) subquery
+    ),
+    actions AS (
+      SELECT jsonb_object_agg(action, action_count) AS logs_by_action
+      FROM (
+        SELECT action, COUNT(*)::int AS action_count
+        FROM audit_logs
+        GROUP BY action
+      ) a
+    ),
+    tables AS (
+      SELECT jsonb_object_agg(table_name, table_count) AS logs_by_table
+      FROM (
+        SELECT table_name, COUNT(*)::int AS table_count
+        FROM audit_logs
+        GROUP BY table_name
+      ) t
+    )
+    SELECT
+      base.total_logs,
+      base.oldest_log,
+      base.newest_log,
+      actions.logs_by_action,
+      tables.logs_by_table
+    FROM base, actions, tables
   `);
 
   const row = stats.rows[0];

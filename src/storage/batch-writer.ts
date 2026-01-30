@@ -128,8 +128,17 @@ export class BatchAuditWriter {
       });
     }
 
+    const shouldAwait = this.config.waitForWrite || this.config.strictMode;
+
+    if (!shouldAwait) {
+      // Prevent unhandled rejections when callers don't await writes.
+      promises.forEach((promise) => {
+        promise.catch(() => {});
+      });
+    }
+
     // In strict mode or waitForWrite, wait for all logs to be written
-    if (this.config.waitForWrite || this.config.strictMode) {
+    if (shouldAwait) {
       await this.flush();
       await Promise.all(promises);
     }

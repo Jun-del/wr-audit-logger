@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { pgTable, serial, text, varchar } from "drizzle-orm/pg-core";
 import { Client } from "pg";
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { createAuditLogger, createAuditTableSQL, auditLogs } from "../../src/index.js";
+import { createAuditLogger, auditLogs } from "../../src/index.js";
 
 // Generate unique table name to avoid conflicts
 const TEST_ID = `returning_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -29,9 +29,6 @@ describe("Automatic .returning() Injection", () => {
     client = new Client(dbUrl);
     await client.connect();
     originalDb = drizzle(client);
-
-    // Create audit table (idempotent)
-    await originalDb.execute(createAuditTableSQL);
 
     // Create test table with unique name
     await originalDb.execute(`
@@ -253,7 +250,7 @@ describe("Automatic .returning() Injection", () => {
   });
 
   describe("Return value handling", () => {
-    it("should NOT return data when user didn't call .returning()", async () => {
+    it("should return data when .returning() is auto-injected", async () => {
       const auditLogger = createAuditLogger(originalDb, {
         tables: [TABLE_NAME],
       });
@@ -266,9 +263,10 @@ describe("Automatic .returning() Injection", () => {
         name: "No Return",
       });
 
-      // The result should be the Drizzle query result (not the inserted row)
-      // This maintains backward compatibility with existing code
-      expect(result).toBeDefined();
+      // Auto-injected .returning() returns inserted rows
+      expect(Array.isArray(result)).toBe(true);
+      expect(result[0]).toHaveProperty("id");
+      expect(result[0].email).toBe("no-return@example.com");
     });
 
     it("should return inserted data when user calls .returning()", async () => {

@@ -31,12 +31,48 @@ export function createUpdateAuditLogs(
     return logs;
   }
 
+  if (beforeRecords.length === 0) {
+    // Fallback: log updates even when old values can't be captured.
+    for (const after of afterRecords) {
+      if (!after) continue;
+
+      const newValues = filterFields(after, tableName, config);
+      logs.push({
+        action: "UPDATE" as const,
+        tableName,
+        recordId: extractPrimaryKey(after, tableName),
+        oldValues: undefined,
+        newValues,
+        changedFields: undefined,
+      });
+    }
+    return logs;
+  }
+
+  const beforeById = new Map<string, Record<string, unknown>>();
+  for (const before of beforeRecords) {
+    if (!before) continue;
+    beforeById.set(extractPrimaryKey(before, tableName), before);
+  }
+
   // Match before and after records by primary key
   for (let i = 0; i < afterRecords.length; i++) {
     const after = afterRecords[i];
-    const before = beforeRecords[i]; // Assumes same order; improve with PK matching
+    if (!after) continue;
 
-    if (!before || !after) continue;
+    const before = beforeById.get(extractPrimaryKey(after, tableName));
+    if (!before) {
+      const newValues = filterFields(after, tableName, config);
+      logs.push({
+        action: "UPDATE" as const,
+        tableName,
+        recordId: extractPrimaryKey(after, tableName),
+        oldValues: undefined,
+        newValues,
+        changedFields: undefined,
+      });
+      continue;
+    }
 
     const oldValues = filterFields(before, tableName, config);
     const newValues = filterFields(after, tableName, config);

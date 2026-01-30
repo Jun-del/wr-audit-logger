@@ -13,6 +13,52 @@ interface QueuedLog {
  * Allows custom writers to benefit from batching
  */
 export class BatchedCustomWriter {
+  private static instances = new Set<BatchedCustomWriter>();
+  private static listenersAttached = false;
+  private static handleBeforeExit = (): void => {
+    BatchedCustomWriter.shutdownAll();
+  };
+  private static handleSigterm = (): void => {
+    BatchedCustomWriter.shutdownAll();
+  };
+  private static handleSigint = (): void => {
+    BatchedCustomWriter.shutdownAll();
+  };
+
+  private static shutdownAll(): void {
+    for (const instance of Array.from(BatchedCustomWriter.instances)) {
+      instance.shutdown().catch((error) => {
+        console.error("Failed to shutdown batched custom writer:", error);
+      });
+    }
+  }
+
+  private static registerInstance(instance: BatchedCustomWriter): void {
+    BatchedCustomWriter.instances.add(instance);
+
+    if (!BatchedCustomWriter.listenersAttached && typeof process !== "undefined") {
+      process.on("beforeExit", BatchedCustomWriter.handleBeforeExit);
+      process.on("SIGTERM", BatchedCustomWriter.handleSigterm);
+      process.on("SIGINT", BatchedCustomWriter.handleSigint);
+      BatchedCustomWriter.listenersAttached = true;
+    }
+  }
+
+  private static unregisterInstance(instance: BatchedCustomWriter): void {
+    BatchedCustomWriter.instances.delete(instance);
+
+    if (
+      BatchedCustomWriter.listenersAttached &&
+      BatchedCustomWriter.instances.size === 0 &&
+      typeof process !== "undefined"
+    ) {
+      process.off("beforeExit", BatchedCustomWriter.handleBeforeExit);
+      process.off("SIGTERM", BatchedCustomWriter.handleSigterm);
+      process.off("SIGINT", BatchedCustomWriter.handleSigint);
+      BatchedCustomWriter.listenersAttached = false;
+    }
+  }
+
   private queue: QueuedLog[] = [];
   private flushTimeout: NodeJS.Timeout | null = null;
   private isShuttingDown = false;
@@ -41,12 +87,8 @@ export class BatchedCustomWriter {
     // Start flush timer
     this.scheduleFlush();
 
-    // Handle graceful shutdown
-    if (typeof process !== "undefined") {
-      process.on("beforeExit", () => this.shutdown());
-      process.on("SIGTERM", () => this.shutdown());
-      process.on("SIGINT", () => this.shutdown());
-    }
+    // Handle graceful shutdown for all instances with shared listeners
+    BatchedCustomWriter.registerInstance(this);
   }
 
   /**
@@ -226,6 +268,8 @@ export class BatchedCustomWriter {
     if (this.queue.length > 0) {
       await this.flush();
     }
+
+    BatchedCustomWriter.unregisterInstance(this);
   }
 
   /**

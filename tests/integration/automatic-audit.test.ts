@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { pgTable, serial, text, varchar } from "drizzle-orm/pg-core";
 import { Client } from "pg";
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { createAuditLogger, createAuditTableSQL, auditLogs } from "../../src/index.js";
+import { createAuditLogger, auditLogs } from "../../src/index.js";
 
 // Generate unique table names to avoid conflicts when running tests in parallel
 const TEST_ID = `auto_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -41,9 +41,6 @@ describe("Automatic Audit Logging (Integration)", () => {
     client = new Client(dbUrl);
     await client.connect();
     originalDb = drizzle(client);
-
-    // Create audit table (idempotent - won't fail if already exists)
-    await originalDb.execute(createAuditTableSQL);
 
     // Create test tables with unique names (no IF NOT EXISTS needed)
     await originalDb.execute(`
@@ -293,6 +290,41 @@ describe("Automatic Audit Logging (Integration)", () => {
       expect(logs[0].ipAddress).toBe("10.0.0.1");
       expect(logs[0].userAgent).toBe("TestAgent/1.0");
       expect(logs[0].metadata).toMatchObject({ test: "value" });
+    });
+  });
+
+  describe("Manual logging and metadata", () => {
+    it("should support custom actions and merge metadata sources", async () => {
+      const auditLogger = createAuditLogger(originalDb, {
+        tables: [USERS_TABLE],
+        getMetadata: () => ({ fromConfig: true, shared: "config" }),
+      });
+
+      auditLogger.setContext({
+        userId: "manual-user",
+        metadata: { fromContext: true, shared: "context" },
+      });
+
+      await auditLogger.log({
+        action: "READ",
+        tableName: USERS_TABLE,
+        recordId: "manual-1",
+        metadata: { fromLog: true, shared: "log" },
+      });
+
+      const logs = await originalDb
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.tableName, USERS_TABLE));
+
+      const customLog = logs.find((entry) => entry.action === "READ");
+      expect(customLog).toBeDefined();
+      expect(customLog?.metadata).toMatchObject({
+        fromConfig: true,
+        fromContext: true,
+        fromLog: true,
+        shared: "log",
+      });
     });
   });
 
