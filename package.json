@@ -35,7 +35,7 @@
     "lint:fix": "oxlint --fix",
     "local-release": "changeset version && changeset publish",
     "prepare": "husky",
-    "prepublishOnly": "npm run ci",
+    "prepublishOnly": "pnpm run ci",
     "test": "vitest run",
     "test:batch": "dotenvx run -- tsx scripts/batch.ts",
     "test:full-flow": "dotenvx run -- tsx scripts/test-full-flow.ts",

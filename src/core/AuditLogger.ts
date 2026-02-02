@@ -13,6 +13,18 @@ import { createInterceptedDb } from "./interceptor.js";
 /**
  * Main audit logger class
  * Wraps a Drizzle database instance to provide automatic audit logging
+ *
+ * @example
+ * ```typescript
+ * const auditLogger = new AuditLogger(db, {
+ *   tables: ['users', 'posts'],
+ *   excludeFields: ['password'],
+ *   getUserId: () => getCurrentUser()?.id
+ * });
+ *
+ * const auditedDb = auditLogger.createAuditedDb();
+ * await auditedDb.insert(users).values({ ... });
+ * ```
  */
 export class AuditLogger {
   private config: NormalizedConfig;
@@ -22,11 +34,27 @@ export class AuditLogger {
   private batchedCustomWriter: BatchedCustomWriter | null = null;
   private customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
 
+  /**
+   * Creates a new AuditLogger instance
+   *
+   * @param db - Drizzle database instance to wrap
+   * @param config - Audit configuration options
+   * @throws {Error} If config validation fails (e.g., invalid batch size)
+   *
+   * @example
+   * ```typescript
+   * const logger = new AuditLogger(db, {
+   *   tables: ['users'],
+   *   batch: { batchSize: 100, flushInterval: 1000 }
+   * });
+   * ```
+   */
   constructor(
     private db: PostgresJsDatabase<any>,
     config: AuditConfig,
   ) {
     this.config = this.normalizeConfig(config);
+    this.validateConfig(this.config);
     this.customWriter = config.customWriter;
 
     // Initialize appropriate writer
@@ -56,7 +84,28 @@ export class AuditLogger {
   }
 
   /**
+   * Validate configuration values
+   * @private
+   * @throws {Error} If configuration is invalid
+   */
+  private validateConfig(config: NormalizedConfig): void {
+    if (config.batch) {
+      if (config.batch.batchSize <= 0) {
+        throw new Error("batchSize must be greater than 0");
+      }
+      if (config.batch.flushInterval <= 0) {
+        throw new Error("flushInterval must be greater than 0");
+      }
+    }
+
+    if (config.tables !== "*" && config.tables.length === 0) {
+      throw new Error("tables array cannot be empty. Use '*' for all tables.");
+    }
+  }
+
+  /**
    * Normalize configuration with defaults
+   * @private
    */
   private normalizeConfig(config: AuditConfig): NormalizedConfig {
     const batchConfig = config.batch
@@ -82,7 +131,16 @@ export class AuditLogger {
   }
 
   /**
-   * Create a wrapped database instance with audit logging
+   * Create a wrapped database instance with automatic audit logging
+   *
+   * @returns Database instance that automatically logs all INSERT/UPDATE/DELETE operations
+   *
+   * @example
+   * ```typescript
+   * const auditedDb = logger.createAuditedDb();
+   * await auditedDb.insert(users).values({ email: 'user@example.com' });
+   * // Audit log created automatically
+   * ```
    */
   createAuditedDb(): PostgresJsDatabase<any> {
     return createInterceptedDb(this.db, this);
@@ -91,6 +149,16 @@ export class AuditLogger {
   /**
    * Check if a table should be audited
    * Exposed for use by interceptor
+   *
+   * @param tableName - Name of the table to check
+   * @returns True if the table should be audited
+   *
+   * @example
+   * ```typescript
+   * if (logger.shouldAudit('users')) {
+   *   // Table is being audited
+   * }
+   * ```
    */
   shouldAudit(tableName: string): boolean {
     // Never audit the audit table itself
@@ -108,6 +176,15 @@ export class AuditLogger {
   /**
    * Check if old values should be captured for UPDATE operations
    * Exposed for use by interceptor
+   *
+   * @returns True if old values should be captured
+   *
+   * @example
+   * ```typescript
+   * if (logger.shouldCaptureOldValues()) {
+   *   // Will run SELECT before UPDATE to get old values
+   * }
+   * ```
    */
   shouldCaptureOldValues(): boolean {
     return this.config.captureOldValues;
@@ -115,6 +192,14 @@ export class AuditLogger {
 
   /**
    * Manually log an INSERT operation
+   *
+   * @param tableName - Name of the table
+   * @param insertedRecords - Record(s) that were inserted
+   *
+   * @example
+   * ```typescript
+   * await logger.logInsert('users', { id: 1, email: 'user@example.com' });
+   * ```
    */
   async logInsert(
     tableName: string,
@@ -130,6 +215,18 @@ export class AuditLogger {
 
   /**
    * Manually log an UPDATE operation
+   *
+   * @param tableName - Name of the table
+   * @param beforeRecords - Record(s) before the update
+   * @param afterRecords - Record(s) after the update
+   *
+   * @example
+   * ```typescript
+   * await logger.logUpdate('users',
+   *   { id: 1, name: 'Old' },
+   *   { id: 1, name: 'New' }
+   * );
+   * ```
    */
   async logUpdate(
     tableName: string,
@@ -147,6 +244,14 @@ export class AuditLogger {
 
   /**
    * Manually log a DELETE operation
+   *
+   * @param tableName - Name of the table
+   * @param deletedRecords - Record(s) that were deleted
+   *
+   * @example
+   * ```typescript
+   * await logger.logDelete('users', { id: 1, email: 'deleted@example.com' });
+   * ```
    */
   async logDelete(
     tableName: string,
@@ -162,6 +267,7 @@ export class AuditLogger {
 
   /**
    * Internal method to write audit logs (uses custom writer if provided)
+   * @private
    */
   private async writeAuditLogs(logs: any[]): Promise<void> {
     if (logs.length === 0) return;
@@ -210,6 +316,17 @@ export class AuditLogger {
 
   /**
    * Set audit context for current async scope
+   *
+   * @param context - Partial context to merge with existing context
+   *
+   * @example
+   * ```typescript
+   * logger.setContext({
+   *   userId: 'user-123',
+   *   ipAddress: req.ip,
+   *   userAgent: req.headers['user-agent']
+   * });
+   * ```
    */
   setContext(context: Partial<AuditContext>): void {
     this.contextManager.mergeContext(context);
@@ -217,6 +334,20 @@ export class AuditLogger {
 
   /**
    * Run a function with specific audit context
+   *
+   * @param context - Context to use for the operation
+   * @param fn - Function to execute with the context
+   * @returns Result of the function
+   *
+   * @example
+   * ```typescript
+   * await logger.withContext(
+   *   { userId: 'admin', metadata: { reason: 'bulk_import' } },
+   *   async () => {
+   *     await db.insert(users).values([...]);
+   *   }
+   * );
+   * ```
    */
   withContext<T>(context: AuditContext, fn: () => T): T {
     return this.contextManager.runWithContext(context, fn);
@@ -224,6 +355,14 @@ export class AuditLogger {
 
   /**
    * Get current audit context
+   *
+   * @returns Current audit context or undefined if not set
+   *
+   * @example
+   * ```typescript
+   * const context = logger.getContext();
+   * console.log('Current user:', context?.userId);
+   * ```
    */
   getContext(): AuditContext | undefined {
     return this.contextManager.getContext();
@@ -232,9 +371,18 @@ export class AuditLogger {
   /**
    * Generic manual logging for any operation (READ, custom actions, etc.)
    *
+   * @param entry - Audit log entry details
+   * @param entry.action - Action type (e.g., 'READ', 'EXPORT')
+   * @param entry.tableName - Table name
+   * @param entry.recordId - Record identifier
+   * @param entry.oldValues - Optional old values
+   * @param entry.newValues - Optional new values
+   * @param entry.metadata - Optional metadata
+   *
    * @example
+   * ```typescript
    * // Log a READ operation
-   * await auditLogger.log({
+   * await logger.log({
    *   action: 'READ',
    *   tableName: 'sensitive_documents',
    *   recordId: documentId,
@@ -242,14 +390,14 @@ export class AuditLogger {
    *   metadata: { reason: 'compliance_audit' }
    * });
    *
-   * @example
    * // Log a custom action
-   * await auditLogger.log({
+   * await logger.log({
    *   action: 'EXPORT',
    *   tableName: 'customer_data',
    *   recordId: customerId,
    *   metadata: { format: 'CSV', rowCount: 1500 }
    * });
+   * ```
    */
   async log(entry: {
     action: string;
@@ -282,6 +430,19 @@ export class AuditLogger {
 
   /**
    * Manually flush pending batch logs (only works with batch mode)
+   *
+   * @returns Promise that resolves when flush is complete
+   *
+   * @example
+   * ```typescript
+   * // Insert many records
+   * for (const record of records) {
+   *   await db.insert(users).values(record);
+   * }
+   *
+   * // Ensure all logs are written before continuing
+   * await logger.flush();
+   * ```
    */
   async flush(): Promise<void> {
     if (this.batchWriter) {
@@ -295,6 +456,17 @@ export class AuditLogger {
   /**
    * Gracefully shutdown the audit logger
    * Flushes all pending logs before shutting down
+   *
+   * @returns Promise that resolves when shutdown is complete
+   *
+   * @example
+   * ```typescript
+   * // On application shutdown
+   * process.on('SIGTERM', async () => {
+   *   await logger.shutdown();
+   *   process.exit(0);
+   * });
+   * ```
    */
   async shutdown(): Promise<void> {
     if (this.batchWriter) {
@@ -307,6 +479,17 @@ export class AuditLogger {
 
   /**
    * Get batch writer stats (only available in batch mode)
+   *
+   * @returns Writer statistics or undefined if not in batch mode
+   *
+   * @example
+   * ```typescript
+   * const stats = logger.getStats();
+   * if (stats) {
+   *   console.log('Queue size:', stats.queueSize);
+   *   console.log('Is writing:', stats.isWriting);
+   * }
+   * ```
    */
   getStats():
     | {

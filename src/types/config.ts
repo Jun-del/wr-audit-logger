@@ -100,12 +100,14 @@ export interface BatchConfig {
   /**
    * Maximum number of logs to batch before automatic flush
    * @default 100
+   * @minimum 1
    */
   batchSize?: number;
 
   /**
    * Interval in milliseconds to automatically flush pending logs
    * @default 1000 (1 second)
+   * @minimum 1
    */
   flushInterval?: number;
 
@@ -147,6 +149,27 @@ export interface AuditContext {
    * Transaction ID to group related operations
    */
   transactionId?: string;
+}
+
+/**
+ * Statistics from batch writer
+ * Useful for monitoring queue health and performance
+ */
+export interface BatchWriterStats {
+  /**
+   * Number of audit logs currently queued
+   */
+  queueSize: number;
+
+  /**
+   * Whether a write operation is currently in progress
+   */
+  isWriting: boolean;
+
+  /**
+   * Whether the writer is shutting down
+   */
+  isShuttingDown: boolean;
 }
 
 /**
