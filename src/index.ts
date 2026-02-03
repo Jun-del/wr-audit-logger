@@ -48,8 +48,11 @@ export { initializeAuditLogging, checkAuditSetup, getAuditStats } from "./utils/
  * // ✓ Audit log created with before/after values
  * ```
  */
-export function createAuditLogger(db: PostgresJsDatabase<any>, config: AuditConfig) {
-  const logger = new AuditLogger(db, config);
+export function createAuditLogger<TSchema extends Record<string, unknown>>(
+  db: PostgresJsDatabase<TSchema>,
+  config: AuditConfig,
+) {
+  const logger = new AuditLogger<TSchema>(db, config);
 
   return {
     /**

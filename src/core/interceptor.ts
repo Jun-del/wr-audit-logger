@@ -93,10 +93,10 @@ function extractWhereClause(queryBuilder: any): any {
 /**
  * Create a proxied database instance that intercepts operations
  */
-export function createInterceptedDb(
-  db: PostgresJsDatabase<any>,
-  auditLogger: AuditLogger,
-): PostgresJsDatabase<any> {
+export function createInterceptedDb<TSchema extends Record<string, unknown>>(
+  db: PostgresJsDatabase<TSchema>,
+  auditLogger: AuditLogger<TSchema>,
+): PostgresJsDatabase<TSchema> {
   return new Proxy(db, {
     get(target, prop) {
       const original = target[prop as keyof typeof target];
@@ -113,7 +113,7 @@ export function createInterceptedDb(
 
       return original;
     },
-  }) as PostgresJsDatabase<any>;
+  }) as PostgresJsDatabase<TSchema>;
 }
 
 /**

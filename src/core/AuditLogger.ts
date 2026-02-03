@@ -28,7 +28,7 @@ import { createInterceptedDb } from "./interceptor.js";
  * await auditedDb.insert(users).values({ ... });
  * ```
  */
-export class AuditLogger {
+export class AuditLogger<TSchema extends Record<string, unknown> = any> {
   private config: NormalizedConfig;
   private contextManager = new AuditContextManager();
   private writer: AuditWriter | null = null;
@@ -52,7 +52,7 @@ export class AuditLogger {
    * ```
    */
   constructor(
-    private db: PostgresJsDatabase<any>,
+    private db: PostgresJsDatabase<TSchema>,
     config: AuditConfig,
   ) {
     this.config = this.normalizeConfig(config);
@@ -144,7 +144,7 @@ export class AuditLogger {
    * // Audit log created automatically
    * ```
    */
-  createAuditedDb(): PostgresJsDatabase<any> {
+  createAuditedDb(): PostgresJsDatabase<TSchema> {
     return createInterceptedDb(this.db, this);
   }
 
