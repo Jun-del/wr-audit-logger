@@ -1,5 +1,11 @@
 # wr-audit-logger
 
+## 0.1.3
+
+### Patch Changes
+
+- 8384917: improve interceptor typings and batch error tracking
+
 ## 0.1.2
 
 ### Patch Changes
