@@ -34,7 +34,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
   private writer: AuditWriter | null = null;
   private batchWriter: BatchAuditWriter | null = null;
   private batchedCustomWriter: BatchedCustomWriter | null = null;
-  private customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
+  private customWriter?: AuditConfig["customWriter"];
 
   /**
    * Creates a new AuditLogger instance

@@ -4,11 +4,33 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 // Enable debug logging via environment variable
 const DEBUG = process.env.AUDIT_DEBUG === "true";
-function debug(...args: any[]) {
+function debug(...args: unknown[]) {
   if (DEBUG) {
     console.log("[AUDIT DEBUG]", ...args);
   }
 }
+
+type QueryBuilderLike = Record<string, unknown> & {
+  table?: unknown;
+  config?: {
+    table?: unknown;
+    where?: unknown;
+  };
+  _?: {
+    table?: unknown;
+    where?: unknown;
+    name?: string;
+    config?: { name?: string };
+  };
+  name?: string;
+  toSQL?: () => { sql?: string };
+  returning?: (...args: unknown[]) => QueryBuilderLike;
+  then?: (...args: unknown[]) => unknown;
+  catch?: (...args: unknown[]) => unknown;
+  finally?: (...args: unknown[]) => unknown;
+};
+
+type QueryMethod = (...args: unknown[]) => QueryBuilderLike;
 
 /**
  * Extract table name from Drizzle query builder
@@ -23,7 +45,9 @@ function resolveTableName(table: unknown): string | null {
   }
 
   const metaName =
-    (table as any)?._?.name ?? (table as any)?._?.config?.name ?? (table as any)?.name;
+    (table as QueryBuilderLike)?._?.name ??
+    (table as QueryBuilderLike)?._?.config?.name ??
+    (table as QueryBuilderLike)?.name;
   if (typeof metaName === "string" && metaName.length > 0) {
     return metaName;
   }
@@ -31,7 +55,7 @@ function resolveTableName(table: unknown): string | null {
   return null;
 }
 
-function extractTableName(queryBuilder: any, tableRef?: unknown): string | null {
+function extractTableName(queryBuilder: QueryBuilderLike, tableRef?: unknown): string | null {
   try {
     const directRef = resolveTableName(tableRef);
     if (directRef) {
@@ -60,7 +84,7 @@ function extractTableName(queryBuilder: any, tableRef?: unknown): string | null 
     if (sqlQuery?.sql) {
       const match = sqlQuery.sql.match(/(?:from|into|update)\s+(?:"?(\w+)"?\.)?"?(\w+)"?/i);
       if (match) {
-        return match[2] || match[1];
+        return match[2] ?? match[1] ?? null;
       }
     }
   } catch (_e) {
@@ -73,7 +97,7 @@ function extractTableName(queryBuilder: any, tableRef?: unknown): string | null 
 /**
  * Extract WHERE clause conditions to query "before" state
  */
-function extractWhereClause(queryBuilder: any): any {
+function extractWhereClause(queryBuilder: QueryBuilderLike): unknown {
   try {
     // Get the WHERE condition from query builder
     if (queryBuilder.config?.where) {
@@ -103,12 +127,12 @@ export function createInterceptedDb<TSchema extends Record<string, unknown>>(
 
       // Intercept insert/update/delete methods
       if (prop === "insert" || prop === "update" || prop === "delete") {
-        return createQueryBuilderProxy(prop, original, target, auditLogger);
+        return createQueryBuilderProxy(prop, original as QueryMethod, target, auditLogger);
       }
 
       // Intercept transaction method to maintain context
       if (prop === "transaction") {
-        return createTransactionProxy(original, target, auditLogger);
+        return createTransactionProxy(original as unknown, target, auditLogger);
       }
 
       return original;
@@ -121,11 +145,11 @@ export function createInterceptedDb<TSchema extends Record<string, unknown>>(
  */
 function createQueryBuilderProxy(
   operation: string,
-  originalMethod: any,
-  db: any,
+  originalMethod: QueryMethod,
+  db: PostgresJsDatabase<any>,
   auditLogger: AuditLogger,
 ) {
-  return function (...args: any[]) {
+  return function (...args: unknown[]) {
     // Call original method to get the query builder
     const queryBuilder = originalMethod.apply(db, args);
     const tableRef = args[0];
@@ -140,8 +164,8 @@ function createQueryBuilderProxy(
  */
 function createExecutionProxy(
   operation: string,
-  queryBuilder: any,
-  db: any,
+  queryBuilder: QueryBuilderLike,
+  db: PostgresJsDatabase<any>,
   auditLogger: AuditLogger,
   tableRef?: unknown,
 ) {
@@ -150,7 +174,7 @@ function createExecutionProxy(
 
   const proxy = new Proxy(queryBuilder, {
     get(target, prop) {
-      const original = target[prop];
+      const original = (target as Record<string, unknown>)[prop as string];
 
       // Track if .returning() was called
       if (prop === "returning") {
@@ -159,11 +183,11 @@ function createExecutionProxy(
 
       // Intercept promise methods (then, catch, finally) which trigger execution
       if (prop === "then" || prop === "catch" || prop === "finally") {
-        return function (...args: any[]) {
+        return function (...args: unknown[]) {
           // If we've already intercepted, just pass through
           if (hasIntercepted) {
             debug(`Already intercepted for ${operation}, passing through ${String(prop)}`);
-            return original?.apply(target, args);
+            return (original as Function | undefined)?.apply(target, args);
           }
 
           hasIntercepted = true;
@@ -175,7 +199,7 @@ function createExecutionProxy(
             debug(
               `Skipping audit for ${tableName} (shouldAudit: ${tableName ? auditLogger.shouldAudit(tableName) : "no table"})`,
             );
-            return original?.apply(target, args);
+            return (original as Function | undefined)?.apply(target, args);
           }
 
           // For INSERT/UPDATE/DELETE, automatically add .returning() if not present
@@ -216,20 +240,20 @@ function createExecutionProxy(
                 `${operation} on ${tableName} completed, result count: ${Array.isArray(result) ? result.length : 1}`,
               );
               if (prop === "then" && args[0]) {
-                return args[0](result);
+                return (args[0] as Function)(result);
               }
               if (prop === "finally" && args[0]) {
-                args[0]();
+                (args[0] as Function)();
               }
               return result;
             },
             (error) => {
               debug(`${operation} on ${tableName} failed:`, error.message);
               if (prop === "catch" && args[0]) {
-                return args[0](error);
+                return (args[0] as Function)(error);
               }
               if (prop === "finally" && args[0]) {
-                args[0]();
+                (args[0] as Function)();
               }
               throw error;
             },
@@ -239,12 +263,18 @@ function createExecutionProxy(
 
       // For fluent API methods (where, set, values, returning, etc.), continue wrapping
       if (typeof original === "function") {
-        return function (...args: any[]) {
-          const result = original.apply(target, args);
+        return function (...args: unknown[]) {
+          const result = (original as Function).apply(target, args);
 
           // If it returns a new builder, wrap it too (preserve tableRef)
           if (result && typeof result === "object" && result !== target) {
-            return createExecutionProxy(operation, result, db, auditLogger, tableRef);
+            return createExecutionProxy(
+              operation,
+              result as QueryBuilderLike,
+              db,
+              auditLogger,
+              tableRef,
+            );
           }
 
           // Preserve the proxy when chaining methods that return `this`
@@ -269,14 +299,14 @@ function createExecutionProxy(
 async function executeWithAudit(
   operation: string,
   tableName: string,
-  queryBuilder: any,
-  originalExecute: any,
-  executeArgs: any[],
-  db: any,
+  queryBuilder: QueryBuilderLike,
+  originalExecute: unknown,
+  executeArgs: unknown[],
+  db: PostgresJsDatabase<any>,
   auditLogger: AuditLogger,
   tableRef?: unknown,
-): Promise<any> {
-  let beforeState: any[] = [];
+): Promise<unknown> {
+  let beforeState: unknown[] = [];
 
   try {
     // For UPDATE only, capture the "before" state if configured
@@ -286,16 +316,16 @@ async function executeWithAudit(
 
     // Execute the actual operation
     // For DELETE, we rely on .returning() which is auto-injected
-    let result;
-    if (typeof originalExecute === "function" && originalExecute.length === 0) {
+    let result: unknown;
+    if (typeof originalExecute === "function" && (originalExecute as Function).length === 0) {
       // It's a wrapper function we created
-      result = await originalExecute();
+      result = await (originalExecute as Function)();
     } else if (originalExecute) {
       // It's the original method from Drizzle
-      result = await originalExecute.apply(queryBuilder, executeArgs);
+      result = await (originalExecute as Function).apply(queryBuilder, executeArgs);
     } else {
       // No execute method, the queryBuilder itself is thenable
-      result = await queryBuilder;
+      result = await Promise.resolve(queryBuilder as unknown);
     }
 
     // Create audit logs based on operation type
@@ -313,10 +343,10 @@ async function executeWithAudit(
  */
 async function captureBeforeState(
   tableName: string,
-  queryBuilder: any,
-  db: any,
+  queryBuilder: QueryBuilderLike,
+  db: PostgresJsDatabase<any>,
   tableRef?: unknown,
-): Promise<any[]> {
+): Promise<unknown[]> {
   try {
     const whereClause = extractWhereClause(queryBuilder);
 
@@ -328,15 +358,15 @@ async function captureBeforeState(
     }
 
     // Query current state
+    const fromTarget =
+      (tableRef as any) ||
+      queryBuilder.table ||
+      queryBuilder._?.table ||
+      queryBuilder.config?.table;
     const result = await db
       .select()
-      .from(
-        (tableRef as any) ||
-          queryBuilder.table ||
-          queryBuilder._?.table ||
-          queryBuilder.config?.table,
-      )
-      .where(whereClause);
+      .from(fromTarget as any)
+      .where(whereClause as any);
 
     return Array.isArray(result) ? result : [result];
   } catch (error) {
@@ -348,43 +378,49 @@ async function captureBeforeState(
 /**
  * Create audit logs after operation completes
  */
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 async function createAuditLogs(
   operation: string,
   tableName: string,
-  beforeState: any[],
-  result: any,
+  beforeState: unknown[],
+  result: unknown,
   auditLogger: AuditLogger,
 ): Promise<void> {
   const records = Array.isArray(result) ? result : result ? [result] : [];
+  const recordObjects = records.filter(isRecordObject);
+  const beforeObjects = beforeState.filter(isRecordObject);
 
   debug(
     `Creating audit logs for ${operation} on ${tableName}, records: ${records.length}, beforeState: ${beforeState.length}`,
   );
 
-  if (records.length === 0 && beforeState.length === 0) {
+  if (recordObjects.length === 0 && beforeObjects.length === 0) {
     debug("No records to audit");
     return;
   }
 
   switch (operation) {
     case "insert":
-      if (records.length > 0) {
-        debug(`Logging ${records.length} INSERT operations`);
-        await auditLogger.logInsert(tableName, records);
+      if (recordObjects.length > 0) {
+        debug(`Logging ${recordObjects.length} INSERT operations`);
+        await auditLogger.logInsert(tableName, recordObjects);
       }
       break;
 
     case "update":
-      if (records.length > 0 && beforeState.length > 0) {
-        debug(`Logging ${records.length} UPDATE operations`);
-        await auditLogger.logUpdate(tableName, beforeState, records);
-      } else if (records.length > 0 && beforeState.length === 0) {
+      if (recordObjects.length > 0 && beforeObjects.length > 0) {
+        debug(`Logging ${recordObjects.length} UPDATE operations`);
+        await auditLogger.logUpdate(tableName, beforeObjects, recordObjects);
+      } else if (recordObjects.length > 0 && beforeObjects.length === 0) {
         // captureOldValues is disabled, log without old values
-        debug(`Logging ${records.length} UPDATE operations (without old values)`);
-        await auditLogger.logUpdate(tableName, [], records);
+        debug(`Logging ${recordObjects.length} UPDATE operations (without old values)`);
+        await auditLogger.logUpdate(tableName, [], recordObjects);
       } else {
         debug(
-          `Skipping UPDATE audit: records=${records.length}, beforeState=${beforeState.length}`,
+          `Skipping UPDATE audit: records=${recordObjects.length}, beforeState=${beforeObjects.length}`,
         );
       }
       break;
@@ -392,9 +428,9 @@ async function createAuditLogs(
     case "delete":
       // For DELETE, we use data from .returning() which is auto-injected
       // The deleted data is in the result
-      if (records.length > 0) {
-        debug(`Logging ${records.length} DELETE operations`);
-        await auditLogger.logDelete(tableName, records);
+      if (recordObjects.length > 0) {
+        debug(`Logging ${recordObjects.length} DELETE operations`);
+        await auditLogger.logDelete(tableName, recordObjects);
       } else {
         debug("Skipping DELETE audit: no records matched or returned");
       }
@@ -406,7 +442,10 @@ async function createAuditLogs(
  * Wrap transaction method to maintain audit context
  */
 function createTransactionProxy(originalTransaction: any, db: any, auditLogger: AuditLogger) {
-  return async function (callback: any, options?: any) {
+  return async function (
+    callback: (tx: PostgresJsDatabase<any>) => Promise<unknown>,
+    options?: unknown,
+  ) {
     // Generate transaction ID
     const transactionId = crypto.randomUUID();
 
@@ -419,9 +458,9 @@ function createTransactionProxy(originalTransaction: any, db: any, auditLogger: 
 
     // Run transaction with audit context
     return auditLogger.withContext(transactionContext, async () => {
-      return originalTransaction.call(
+      return (originalTransaction as Function).call(
         db,
-        async (tx: any) => {
+        async (tx: PostgresJsDatabase<any>) => {
           // Wrap the transaction db instance too
           const wrappedTx = createInterceptedDb(tx, auditLogger);
           return callback(wrappedTx);

@@ -73,6 +73,7 @@ export class BatchAuditWriter {
   private flushTimeout: NodeJS.Timeout | null = null;
   private isShuttingDown = false;
   private activeWritePromise: Promise<void> | null = null;
+  private lastError: Error | null = null;
 
   constructor(
     private db: PostgresJsDatabase<any>,
@@ -134,11 +135,8 @@ export class BatchAuditWriter {
 
       // Always log errors, don't silently swallow them
       flushPromise.catch((error) => {
+        this.lastError = error as Error;
         console.error("[AUDIT] Batch flush failed:", error);
-        if (this.config.strictMode) {
-          // Re-throw in strict mode
-          throw error;
-        }
       });
 
       // Wait for flush in strict/sync mode
@@ -177,6 +175,7 @@ export class BatchAuditWriter {
       this.flush()
         .catch((error) => {
           // Always log scheduled flush errors
+          this.lastError = error as Error;
           console.error("[AUDIT] Scheduled flush failed:", error);
           if (this.config.strictMode) {
             // In strict mode, this is critical
@@ -275,6 +274,7 @@ export class BatchAuditWriter {
       items.forEach((item) => item.resolve());
     } catch (error) {
       // Always log the actual error before rejecting
+      this.lastError = error as Error;
       console.error("[AUDIT] Database write failed:", error);
 
       // Reject all promises
@@ -326,5 +326,12 @@ export class BatchAuditWriter {
       isWriting: this.activeWritePromise !== null,
       isShuttingDown: this.isShuttingDown,
     };
+  }
+
+  /**
+   * Get last error (if any) for monitoring
+   */
+  getLastError(): Error | null {
+    return this.lastError;
   }
 }
