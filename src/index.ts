@@ -1,4 +1,9 @@
-import type { AuditConfig, AuditContext } from "./types/config.js";
+import type {
+  AuditConfig,
+  AuditContext,
+  AuditTableName,
+  AuditTableRecord,
+} from "./types/config.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { AuditLogger } from "./core/AuditLogger.js";
 
@@ -50,7 +55,7 @@ export { initializeAuditLogging, checkAuditSetup, getAuditStats } from "./utils/
  */
 export function createAuditLogger<TSchema extends Record<string, unknown>>(
   db: PostgresJsDatabase<TSchema>,
-  config: AuditConfig,
+  config: AuditConfig<TSchema>,
 ) {
   const logger = new AuditLogger<TSchema>(db, config);
 
@@ -72,7 +77,10 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * await auditLogger.logInsert('users', { id: 1, email: 'user@example.com' });
      * ```
      */
-    logInsert: logger.logInsert.bind(logger),
+    logInsert: <TTable extends AuditTableName<TSchema>>(
+      tableName: TTable,
+      insertedRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+    ) => logger.logInsert(tableName, insertedRecords),
 
     /**
      * Manually log an UPDATE operation (for edge cases)
@@ -86,7 +94,11 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * await auditLogger.logUpdate('users', oldUser, newUser);
      * ```
      */
-    logUpdate: logger.logUpdate.bind(logger),
+    logUpdate: <TTable extends AuditTableName<TSchema>>(
+      tableName: TTable,
+      beforeRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+      afterRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+    ) => logger.logUpdate(tableName, beforeRecords, afterRecords),
 
     /**
      * Manually log a DELETE operation (for edge cases)
@@ -99,7 +111,10 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * await auditLogger.logDelete('users', deletedUser);
      * ```
      */
-    logDelete: logger.logDelete.bind(logger),
+    logDelete: <TTable extends AuditTableName<TSchema>>(
+      tableName: TTable,
+      deletedRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+    ) => logger.logDelete(tableName, deletedRecords),
 
     /**
      * Set audit context for current async scope
@@ -163,7 +178,13 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * });
      * ```
      */
-    log: logger.log.bind(logger),
+    log: <TTable extends AuditTableName<TSchema>>(entry: {
+      action: string;
+      tableName: TTable;
+      recordId: string;
+      values?: AuditTableRecord<TSchema, TTable>;
+      metadata?: Record<string, unknown>;
+    }) => logger.log(entry),
 
     /**
      * Manually flush pending batch logs (only works with batch mode)

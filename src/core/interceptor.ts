@@ -406,18 +406,18 @@ async function createAuditLogs(
     case "insert":
       if (recordObjects.length > 0) {
         debug(`Logging ${recordObjects.length} INSERT operations`);
-        await auditLogger.logInsert(tableName, recordObjects);
+        await auditLogger.logInsert(tableName as any, recordObjects as any);
       }
       break;
 
     case "update":
       if (recordObjects.length > 0 && beforeObjects.length > 0) {
         debug(`Logging ${recordObjects.length} UPDATE operations`);
-        await auditLogger.logUpdate(tableName, beforeObjects, recordObjects);
+        await auditLogger.logUpdate(tableName as any, beforeObjects as any, recordObjects as any);
       } else if (recordObjects.length > 0 && beforeObjects.length === 0) {
         // Before state not captured; log with best-effort values
         debug(`Logging ${recordObjects.length} UPDATE operations (without before state)`);
-        await auditLogger.logUpdate(tableName, [], recordObjects);
+        await auditLogger.logUpdate(tableName as any, [], recordObjects as any);
       } else {
         debug(
           `Skipping UPDATE audit: records=${recordObjects.length}, beforeState=${beforeObjects.length}`,
@@ -430,7 +430,7 @@ async function createAuditLogs(
       // The deleted data is in the result
       if (recordObjects.length > 0) {
         debug(`Logging ${recordObjects.length} DELETE operations`);
-        await auditLogger.logDelete(tableName, recordObjects);
+        await auditLogger.logDelete(tableName as any, recordObjects as any);
       } else {
         debug("Skipping DELETE audit: no records matched or returned");
       }

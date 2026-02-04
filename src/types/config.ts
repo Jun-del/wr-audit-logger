@@ -1,20 +1,52 @@
+import type { Table } from "drizzle-orm";
+
+type TableName<TTable> = TTable extends { _: { name: infer N } } ? N : never;
+type TableColumns<TTable> = TTable extends { _: { columns: infer C } }
+  ? C extends Record<string, unknown>
+    ? C
+    : never
+  : never;
+type TableSelect<TTable> = TTable extends { _: { inferSelect: infer S } } ? S : never;
+
+type SchemaTable<TSchema, TName extends string> = {
+  [K in keyof TSchema]: TSchema[K] extends Table
+    ? TableName<TSchema[K]> extends TName
+      ? TSchema[K]
+      : never
+    : never;
+}[keyof TSchema];
+
+export type AuditTableName<TSchema extends Record<string, unknown>> = {
+  [K in keyof TSchema]: TSchema[K] extends Table ? TableName<TSchema[K]> : never;
+}[keyof TSchema] &
+  string;
+
+export type AuditTableRecord<
+  TSchema extends Record<string, unknown>,
+  TName extends AuditTableName<TSchema>,
+> = Partial<TableSelect<SchemaTable<TSchema, TName>>>;
+
+export type AuditFieldConfig<TSchema extends Record<string, unknown>> = {
+  [K in AuditTableName<TSchema>]?: Array<keyof TableColumns<SchemaTable<TSchema, K>> & string>;
+};
+
 /**
  * Configuration options for the audit logger
  */
-export interface AuditConfig {
+export interface AuditConfig<TSchema extends Record<string, unknown> = Record<string, any>> {
   /**
    * Tables to audit. Use '*' to audit all tables.
    * @example ['users', 'vehicles', 'transactions']
    * @example '*'
    */
-  tables: string[] | "*";
+  tables: AuditTableName<TSchema>[] | "*";
 
   /**
    * Specific fields to track per table.
    * If not specified, all fields are tracked.
    * @example { users: ['id', 'email', 'role'], vehicles: ['id', 'make', 'model'] }
    */
-  fields?: Record<string, string[]>;
+  fields?: AuditFieldConfig<TSchema>;
 
   /**
    * Fields to exclude from audit logs globally (e.g., passwords, tokens)
@@ -83,7 +115,7 @@ export interface AuditConfig {
   customWriter?: (
     logs: Array<{
       action: string;
-      tableName: string;
+      tableName: AuditTableName<TSchema>;
       recordId: string;
       values?: Record<string, unknown>;
       metadata?: Record<string, unknown>;
@@ -174,12 +206,11 @@ export interface BatchWriterStats {
 /**
  * Normalized configuration with all defaults applied
  */
-export type NormalizedConfig = Required<
-  Omit<AuditConfig, "getUserId" | "getMetadata" | "customWriter" | "batch">
-> & {
-  getUserId: () => string | undefined | Promise<string | undefined>;
-  getMetadata: () => Record<string, unknown> | Promise<Record<string, unknown>>;
-  updateValuesMode: "changed" | "full";
-  batch: Required<BatchConfig> | null;
-  customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
-};
+export type NormalizedConfig<TSchema extends Record<string, unknown> = Record<string, any>> =
+  Required<Omit<AuditConfig<TSchema>, "getUserId" | "getMetadata" | "customWriter" | "batch">> & {
+    getUserId: () => string | undefined | Promise<string | undefined>;
+    getMetadata: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+    updateValuesMode: "changed" | "full";
+    batch: Required<BatchConfig> | null;
+    customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
+  };

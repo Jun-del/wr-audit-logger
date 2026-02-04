@@ -20,8 +20,9 @@ export function filterFields(
   }
 
   // If specific fields are configured for this table, keep only those
-  if (config.fields[tableName]) {
-    const allowedFields = config.fields[tableName];
+  const fields = config.fields as Record<string, string[] | undefined>;
+  if (fields[tableName]) {
+    const allowedFields = fields[tableName];
     for (const key of Object.keys(filtered)) {
       if (!allowedFields.includes(key)) {
         delete filtered[key];

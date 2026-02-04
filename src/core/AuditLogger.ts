@@ -1,7 +1,13 @@
 import type { BatchAuditWriterStats } from "../storage/batch-writer.js";
 import type { BatchedCustomWriterStats } from "../storage/batched-custom-writer.js";
 import type { AuditLog } from "../types/audit.js";
-import type { AuditConfig, AuditContext, NormalizedConfig } from "../types/config.js";
+import type {
+  AuditConfig,
+  AuditContext,
+  AuditTableName,
+  AuditTableRecord,
+  NormalizedConfig,
+} from "../types/config.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createDeleteAuditLogs } from "../capture/delete.js";
 import { createInsertAuditLogs } from "../capture/insert.js";
@@ -29,12 +35,12 @@ import { createInterceptedDb } from "./interceptor.js";
  * ```
  */
 export class AuditLogger<TSchema extends Record<string, unknown> = any> {
-  private config: NormalizedConfig;
+  private config: NormalizedConfig<TSchema>;
   private contextManager = new AuditContextManager();
   private writer: AuditWriter | null = null;
   private batchWriter: BatchAuditWriter | null = null;
   private batchedCustomWriter: BatchedCustomWriter | null = null;
-  private customWriter?: AuditConfig["customWriter"];
+  private customWriter?: AuditConfig<TSchema>["customWriter"];
 
   /**
    * Creates a new AuditLogger instance
@@ -53,16 +59,16 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    */
   constructor(
     private db: PostgresJsDatabase<TSchema>,
-    config: AuditConfig,
+    config: AuditConfig<TSchema>,
   ) {
     this.config = this.normalizeConfig(config);
     this.validateConfig(this.config);
-    this.customWriter = config.customWriter;
+    this.customWriter = config.customWriter as AuditConfig<TSchema>["customWriter"];
 
     // Initialize appropriate writer
     if (this.config.batch && config.customWriter) {
       // Use batched custom writer
-      this.batchedCustomWriter = new BatchedCustomWriter(config.customWriter, {
+      this.batchedCustomWriter = new BatchedCustomWriter(config.customWriter as any, {
         batchSize: this.config.batch.batchSize,
         flushInterval: this.config.batch.flushInterval,
         strictMode: this.config.strictMode,
@@ -90,7 +96,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * @private
    * @throws {Error} If configuration is invalid
    */
-  private validateConfig(config: NormalizedConfig): void {
+  private validateConfig(config: NormalizedConfig<TSchema>): void {
     if (config.batch) {
       if (config.batch.batchSize <= 0) {
         throw new Error("batchSize must be greater than 0");
@@ -109,7 +115,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * Normalize configuration with defaults
    * @private
    */
-  private normalizeConfig(config: AuditConfig): NormalizedConfig {
+  private normalizeConfig(config: AuditConfig<TSchema>): NormalizedConfig<TSchema> {
     const batchConfig = config.batch
       ? {
           batchSize: config.batch.batchSize ?? 100,
@@ -172,7 +178,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
       return true;
     }
 
-    return this.config.tables.includes(tableName);
+    return (this.config.tables as readonly string[]).includes(tableName);
   }
 
   /**
@@ -194,9 +200,9 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * await logger.logInsert('users', { id: 1, email: 'user@example.com' });
    * ```
    */
-  async logInsert(
-    tableName: string,
-    insertedRecords: Record<string, unknown> | Record<string, unknown>[],
+  async logInsert<TTable extends AuditTableName<TSchema>>(
+    tableName: TTable,
+    insertedRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
   ): Promise<void> {
     if (!this.shouldAudit(tableName)) return;
 
@@ -221,10 +227,10 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * );
    * ```
    */
-  async logUpdate(
-    tableName: string,
-    beforeRecords: Record<string, unknown> | Record<string, unknown>[],
-    afterRecords: Record<string, unknown> | Record<string, unknown>[],
+  async logUpdate<TTable extends AuditTableName<TSchema>>(
+    tableName: TTable,
+    beforeRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+    afterRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
   ): Promise<void> {
     if (!this.shouldAudit(tableName)) return;
 
@@ -246,9 +252,9 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * await logger.logDelete('users', { id: 1, email: 'deleted@example.com' });
    * ```
    */
-  async logDelete(
-    tableName: string,
-    deletedRecords: Record<string, unknown> | Record<string, unknown>[],
+  async logDelete<TTable extends AuditTableName<TSchema>>(
+    tableName: TTable,
+    deletedRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
   ): Promise<void> {
     if (!this.shouldAudit(tableName)) return;
 
@@ -391,11 +397,11 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * });
    * ```
    */
-  async log(entry: {
+  async log<TTable extends AuditTableName<TSchema>>(entry: {
     action: string;
-    tableName: string;
+    tableName: TTable;
     recordId: string;
-    values?: Record<string, unknown>;
+    values?: AuditTableRecord<TSchema, TTable>;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
     if (!this.shouldAudit(entry.tableName)) return;
