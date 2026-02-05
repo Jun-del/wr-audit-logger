@@ -72,29 +72,31 @@ describe("BatchAuditWriter", () => {
     expect(executeMock).toHaveBeenCalledTimes(1);
     const callArg = executeMock.mock.calls[0][0];
     const params = callArg?.params || callArg?.values || [];
-    const paramHit = params.find((param: any) => {
-      const text = typeof param === "string" ? param : JSON.stringify(param);
-      return typeof text === "string" && text.includes('"metadata"');
-    });
-    const chunkHit = callArg?.queryChunks?.find((chunk: any) => {
-      const text =
-        typeof chunk === "string"
-          ? chunk
-          : typeof chunk?.value === "string"
-            ? chunk.value
-            : JSON.stringify(chunk);
-      return typeof text === "string" && text.includes('"metadata"');
-    });
-    const jsonParam = paramHit ?? chunkHit;
+    const chunks = callArg?.queryChunks || [];
+    const candidates = [...params, ...chunks]
+      .map((value: any) =>
+        typeof value === "string"
+          ? value
+          : typeof value?.value === "string"
+            ? value.value
+            : JSON.stringify(value),
+      )
+      .filter((value) => typeof value === "string");
 
-    expect(jsonParam).toBeDefined();
-    const text =
-      typeof jsonParam === "string"
-        ? jsonParam
-        : typeof jsonParam?.value === "string"
-          ? jsonParam.value
-          : JSON.stringify(jsonParam);
-    const parsed = JSON.parse(text);
+    let parsed: any = undefined;
+    for (const candidate of candidates) {
+      try {
+        const value = JSON.parse(candidate);
+        if (Array.isArray(value) && value[0] && Object.hasOwn(value[0], "metadata")) {
+          parsed = value;
+          break;
+        }
+      } catch {
+        // ignore non-JSON chunks
+      }
+    }
+
+    expect(parsed).toBeDefined();
     expect(parsed[0].metadata).toBeNull();
 
     await writer.shutdown();

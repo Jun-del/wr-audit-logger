@@ -30,6 +30,22 @@ export type AuditFieldConfig<TSchema extends Record<string, unknown>> = {
   [K in AuditTableName<TSchema>]?: Array<keyof TableColumns<SchemaTable<TSchema, K>> & string>;
 };
 
+export type AuditColumnKey =
+  | "id"
+  | "userId"
+  | "ipAddress"
+  | "userAgent"
+  | "action"
+  | "tableName"
+  | "recordId"
+  | "values"
+  | "createdAt"
+  | "metadata"
+  | "transactionId"
+  | "deletedAt";
+
+export type AuditColumnMap = Record<AuditColumnKey, string>;
+
 /**
  * Configuration options for the audit logger
  */
@@ -59,6 +75,12 @@ export interface AuditConfig<TSchema extends Record<string, unknown> = Record<st
    * @default 'audit_logs'
    */
   auditTable?: string;
+
+  /**
+   * Map logical audit fields to custom column names
+   * @example { userId: "actor_id", tableName: "resource", createdAt: "created_on" }
+   */
+  auditColumnMap?: Partial<AuditColumnMap>;
 
   /**
    * If true, operations fail if audit logging fails.
@@ -212,5 +234,6 @@ export type NormalizedConfig<TSchema extends Record<string, unknown> = Record<st
     getMetadata: () => Record<string, unknown> | Promise<Record<string, unknown>>;
     updateValuesMode: "changed" | "full";
     batch: Required<BatchConfig> | null;
+    auditColumnMap: AuditColumnMap;
     customWriter?: (logs: any[], context: AuditContext | undefined) => Promise<void> | void;
   };

@@ -67,6 +67,12 @@ import { createAuditTableSQL, createAuditTableSQLFor } from "wr-audit-logger";
 await db.execute(createAuditTableSQL); // default table name
 // or custom table name
 await db.execute(createAuditTableSQLFor("my_audit_logs"));
+// or custom column names
+await db.execute(
+  createAuditTableSQLFor("my_audit_logs", {
+    columnMap: { userId: "actor_id", tableName: "resource" },
+  }),
+);
 ```
 
 ### Problem: Migration fails

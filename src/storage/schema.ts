@@ -1,3 +1,4 @@
+import type { AuditColumnMap } from "../types/config.js";
 import { bigserial, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 /**
@@ -5,8 +6,45 @@ import { bigserial, index, jsonb, pgTable, text, timestamp, varchar } from "driz
  * Stores all database operation audit trails
  */
 // TODO: Flexible structure, defined by the user given schema if provided, else default?
+const DEFAULT_TABLE_NAME = "audit_logs";
+
+const DEFAULT_COLUMN_MAP: AuditColumnMap = {
+  id: "id",
+  userId: "user_id",
+  ipAddress: "ip_address",
+  userAgent: "user_agent",
+  action: "action",
+  tableName: "table_name",
+  recordId: "record_id",
+  values: "values",
+  createdAt: "created_at",
+  metadata: "metadata",
+  transactionId: "transaction_id",
+  deletedAt: "deleted_at",
+};
+
+function assertSafeIdentifier(name: string): void {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    throw new Error(`Invalid identifier: ${name}`);
+  }
+}
+
+function normalizeColumnMap(map?: Partial<AuditColumnMap>): AuditColumnMap {
+  // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
+  const merged = { ...DEFAULT_COLUMN_MAP, ...(map || {}) };
+  const seen = new Set<string>();
+  for (const name of Object.values(merged)) {
+    assertSafeIdentifier(name);
+    if (seen.has(name)) {
+      throw new Error(`Duplicate column name in columnMap: ${name}`);
+    }
+    seen.add(name);
+  }
+  return merged;
+}
+
 export const auditLogs = pgTable(
-  "audit_logs",
+  DEFAULT_TABLE_NAME,
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
 
@@ -44,58 +82,53 @@ export const auditLogs = pgTable(
 );
 
 /**
- * SQL migration to create the audit_logs table
+ * SQL migration to create the audit_logs table (default name)
  * Run this to set up the database
  */
-const DEFAULT_TABLE_NAME = "audit_logs";
-
-function assertSafeIdentifier(name: string): void {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-    throw new Error(`Invalid table name: ${name}`);
-  }
-}
-
-function buildCreateAuditTableSQL(tableName: string): string {
+function buildCreateAuditTableSQL(tableName: string, columnMap?: Partial<AuditColumnMap>): string {
   assertSafeIdentifier(tableName);
+  const columns = normalizeColumnMap(columnMap);
+  const indexPrefix = `idx_${tableName}`;
+  const sequenceName = `${tableName}_${columns.id}_seq`;
 
   return `
 -- Prevent concurrent test runs from racing on schema creation
 SELECT pg_advisory_xact_lock(913742, 540129);
 
-CREATE SEQUENCE IF NOT EXISTS ${tableName}_id_seq;
+CREATE SEQUENCE IF NOT EXISTS ${sequenceName};
 
 CREATE TABLE IF NOT EXISTS ${tableName} (
-  id BIGINT PRIMARY KEY DEFAULT nextval('${tableName}_id_seq'),
+  "${columns.id}" BIGINT PRIMARY KEY DEFAULT nextval('${sequenceName}'),
   
-  user_id VARCHAR(255),
-  ip_address VARCHAR(45),
-  user_agent TEXT,
+  "${columns.userId}" VARCHAR(255),
+  "${columns.ipAddress}" VARCHAR(45),
+  "${columns.userAgent}" TEXT,
   
-  action VARCHAR(255) NOT NULL,
-  table_name VARCHAR(255) NOT NULL,
-  record_id VARCHAR(255) NOT NULL,
+  "${columns.action}" VARCHAR(255) NOT NULL,
+  "${columns.tableName}" VARCHAR(255) NOT NULL,
+  "${columns.recordId}" VARCHAR(255) NOT NULL,
   
-  "values" JSONB,
+  "${columns.values}" JSONB,
   
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "${columns.createdAt}" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   
-  metadata JSONB,
-  transaction_id VARCHAR(255),
+  "${columns.metadata}" JSONB,
+  "${columns.transactionId}" VARCHAR(255),
   
-  deleted_at TIMESTAMPTZ
+  "${columns.deletedAt}" TIMESTAMPTZ
 );
 
-ALTER SEQUENCE ${tableName}_id_seq OWNED BY ${tableName}.id;
+ALTER SEQUENCE ${sequenceName} OWNED BY ${tableName}."${columns.id}";
 
 -- Ensure custom actions are allowed when table already exists
-ALTER TABLE ${tableName} DROP CONSTRAINT IF EXISTS audit_logs_action_check;
-ALTER TABLE ${tableName} ALTER COLUMN action TYPE VARCHAR(255);
+ALTER TABLE ${tableName} DROP CONSTRAINT IF EXISTS ${tableName}_action_check;
+ALTER TABLE ${tableName} ALTER COLUMN "${columns.action}" TYPE VARCHAR(255);
 
-CREATE INDEX IF NOT EXISTS idx_audit_logs_table_record ON ${tableName}(table_name, record_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON ${tableName}(user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON ${tableName}(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON ${tableName}(action);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_table_created ON ${tableName}(table_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS ${indexPrefix}_table_record ON ${tableName}("${columns.tableName}", "${columns.recordId}");
+CREATE INDEX IF NOT EXISTS ${indexPrefix}_user_id ON ${tableName}("${columns.userId}") WHERE "${columns.userId}" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ${indexPrefix}_created_at ON ${tableName}("${columns.createdAt}" DESC);
+CREATE INDEX IF NOT EXISTS ${indexPrefix}_action ON ${tableName}("${columns.action}");
+CREATE INDEX IF NOT EXISTS ${indexPrefix}_table_created ON ${tableName}("${columns.tableName}", "${columns.createdAt}" DESC);
 
 COMMENT ON TABLE ${tableName} IS 'Audit trail for all database operations';
 `;
@@ -110,6 +143,40 @@ export const createAuditTableSQL = buildCreateAuditTableSQL(DEFAULT_TABLE_NAME);
 /**
  * SQL migration for a custom audit table name
  */
-export function createAuditTableSQLFor(tableName = DEFAULT_TABLE_NAME): string {
-  return buildCreateAuditTableSQL(tableName);
+export function createAuditTableSQLFor(
+  tableName = DEFAULT_TABLE_NAME,
+  options?: { columnMap?: Partial<AuditColumnMap> },
+): string {
+  return buildCreateAuditTableSQL(tableName, options?.columnMap);
+}
+
+export function createAuditLogsTable(
+  tableName = DEFAULT_TABLE_NAME,
+  extraColumns?: Record<string, any>,
+) {
+  return pgTable(
+    tableName,
+    {
+      id: bigserial("id", { mode: "number" }).primaryKey(),
+      userId: varchar("user_id", { length: 255 }),
+      ipAddress: varchar("ip_address", { length: 45 }),
+      userAgent: text("user_agent"),
+      action: varchar("action", { length: 255 }).notNull(),
+      tableName: varchar("table_name", { length: 255 }).notNull(),
+      recordId: varchar("record_id", { length: 255 }).notNull(),
+      values: jsonb("values"),
+      createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+      metadata: jsonb("metadata"),
+      transactionId: varchar("transaction_id", { length: 255 }),
+      deletedAt: timestamp("deleted_at", { withTimezone: true }),
+      ...extraColumns,
+    },
+    (table) => [
+      index(`idx_${tableName}_table_record`).on(table.tableName, table.recordId),
+      index(`idx_${tableName}_user_id`).on(table.userId),
+      index(`idx_${tableName}_created_at`).on(table.createdAt.desc()),
+      index(`idx_${tableName}_action`).on(table.action),
+      index(`idx_${tableName}_table_created`).on(table.tableName, table.createdAt.desc()),
+    ],
+  );
 }

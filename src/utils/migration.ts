@@ -1,3 +1,4 @@
+import type { AuditColumnMap } from "../types/config.js";
 // TODO: Replace all postgres-js imports with either generic db or driver-agnostic
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createAuditTableSQL, createAuditTableSQLFor } from "../storage/schema.js";
@@ -8,11 +9,11 @@ import { createAuditTableSQL, createAuditTableSQLFor } from "../storage/schema.j
  */
 export async function initializeAuditLogging(
   db: PostgresJsDatabase<any>,
-  options?: { tableName?: string },
+  options?: { tableName?: string; columnMap?: Partial<AuditColumnMap> },
 ): Promise<void> {
   try {
     const sql = options?.tableName
-      ? createAuditTableSQLFor(options.tableName)
+      ? createAuditTableSQLFor(options.tableName, { columnMap: options.columnMap })
       : createAuditTableSQL;
     await db.execute(sql);
     console.log("✓ Audit logging initialized successfully");
@@ -25,12 +26,17 @@ export async function initializeAuditLogging(
 /**
  * Check if audit logging is properly set up
  */
-export async function checkAuditSetup(db: PostgresJsDatabase<any>): Promise<boolean> {
+export async function checkAuditSetup(
+  db: PostgresJsDatabase<any>,
+  options?: { tableName?: string },
+): Promise<boolean> {
   try {
+    const tableName = options?.tableName ?? "audit_logs";
+    assertSafeIdentifier(tableName);
     const result = await db.execute(`
       SELECT EXISTS (
         SELECT FROM information_schema.tables 
-        WHERE table_name = 'audit_logs'
+        WHERE table_name = '${tableName}'
       )
     `);
 
@@ -43,35 +49,47 @@ export async function checkAuditSetup(db: PostgresJsDatabase<any>): Promise<bool
 /**
  * Get audit log statistics
  */
-export async function getAuditStats(db: PostgresJsDatabase<any>): Promise<{
+export async function getAuditStats(
+  db: PostgresJsDatabase<any>,
+  options?: { tableName?: string; columnMap?: Partial<AuditColumnMap> },
+): Promise<{
   totalLogs: number;
   logsByAction: Record<string, number>;
   logsByTable: Record<string, number>;
   oldestLog: Date | null;
   newestLog: Date | null;
 }> {
+  const tableName = options?.tableName ?? "audit_logs";
+  assertSafeIdentifier(tableName);
+  const columns = {
+    action: options?.columnMap?.action ?? "action",
+    tableName: options?.columnMap?.tableName ?? "table_name",
+    createdAt: options?.columnMap?.createdAt ?? "created_at",
+  };
+  Object.values(columns).forEach(assertSafeIdentifier);
+
   const stats = await db.execute(`
     WITH base AS (
       SELECT
         COUNT(*)::int AS total_logs,
-        MIN(created_at) AS oldest_log,
-        MAX(created_at) AS newest_log
-      FROM audit_logs
+        MIN("${columns.createdAt}") AS oldest_log,
+        MAX("${columns.createdAt}") AS newest_log
+      FROM ${tableName}
     ),
     actions AS (
-      SELECT jsonb_object_agg(action, action_count) AS logs_by_action
+      SELECT jsonb_object_agg("${columns.action}", action_count) AS logs_by_action
       FROM (
-        SELECT action, COUNT(*)::int AS action_count
-        FROM audit_logs
-        GROUP BY action
+        SELECT "${columns.action}", COUNT(*)::int AS action_count
+        FROM ${tableName}
+        GROUP BY "${columns.action}"
       ) a
     ),
     tables AS (
-      SELECT jsonb_object_agg(table_name, table_count) AS logs_by_table
+      SELECT jsonb_object_agg("${columns.tableName}", table_count) AS logs_by_table
       FROM (
-        SELECT table_name, COUNT(*)::int AS table_count
-        FROM audit_logs
-        GROUP BY table_name
+        SELECT "${columns.tableName}", COUNT(*)::int AS table_count
+        FROM ${tableName}
+        GROUP BY "${columns.tableName}"
       ) t
     )
     SELECT
@@ -92,4 +110,9 @@ export async function getAuditStats(db: PostgresJsDatabase<any>): Promise<{
     oldestLog: row?.oldest_log ? new Date(row.oldest_log) : null,
     newestLog: row?.newest_log ? new Date(row.newest_log) : null,
   };
+}
+function assertSafeIdentifier(name: string): void {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    throw new Error(`Invalid identifier: ${name}`);
+  }
 }

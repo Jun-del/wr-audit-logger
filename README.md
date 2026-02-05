@@ -36,6 +36,28 @@ import { createAuditTableSQLFor } from "wr-audit-logger";
 await db.execute(createAuditTableSQLFor("my_audit_logs"));
 ```
 
+Custom column names:
+
+```ts
+import { createAuditTableSQLFor } from "wr-audit-logger";
+await db.execute(
+  createAuditTableSQLFor("my_audit_logs", {
+    columnMap: { userId: "actor_id", tableName: "resource" },
+  }),
+);
+```
+
+Drizzle table helper (custom table name + extra columns):
+
+```ts
+import { createAuditLogsTable } from "wr-audit-logger";
+import { varchar } from "drizzle-orm/pg-core";
+
+export const auditLogs = createAuditLogsTable("my_audit_logs", {
+  companyId: varchar("company_id", { length: 255 }).notNull(),
+});
+```
+
 ### 2. Create an audit logger (wraps your db)
 
 ```ts
@@ -160,6 +182,21 @@ interface AuditConfig {
   // If you change this, use createAuditTableSQLFor() when creating schema
   auditTable?: string;
 
+  // Map logical audit fields to custom column names
+  auditColumnMap?: {
+    userId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    action?: string;
+    tableName?: string;
+    recordId?: string;
+    values?: string;
+    createdAt?: string;
+    metadata?: string;
+    transactionId?: string;
+    deletedAt?: string;
+  };
+
   // Fail the DB operation if audit logging fails (default: false)
   strictMode?: boolean;
 
@@ -211,6 +248,23 @@ Defaults (if omitted):
 - `strictMode`: `false`
 - `updateValuesMode`: `"changed"` (UPDATE stores only changed fields)
 - `batch`: disabled (writes immediately)
+
+## Schema Contract (Default Writer)
+
+If you use the built-in writer (no `customWriter`), your table must have these columns
+or map them via `auditColumnMap`:
+
+- `userId` → `user_id` (nullable)
+- `ipAddress` → `ip_address` (nullable)
+- `userAgent` → `user_agent` (nullable)
+- `action` → `action` (NOT NULL)
+- `tableName` → `table_name` (NOT NULL)
+- `recordId` → `record_id` (NOT NULL)
+- `values` → `values` (JSONB, nullable)
+- `metadata` → `metadata` (JSONB, nullable)
+- `transactionId` → `transaction_id` (nullable)
+
+`created_at` should default to `NOW()`. `id` and `deleted_at` are optional.
 
 ## Examples
 

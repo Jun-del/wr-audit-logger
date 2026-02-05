@@ -4,6 +4,7 @@ import type { AuditLog } from "../types/audit.js";
 import type {
   AuditConfig,
   AuditContext,
+  AuditColumnMap,
   AuditTableName,
   AuditTableRecord,
   NormalizedConfig,
@@ -14,6 +15,7 @@ import { createInsertAuditLogs } from "../capture/insert.js";
 import { createUpdateAuditLogs } from "../capture/update.js";
 import { BatchAuditWriter } from "../storage/batch-writer.js";
 import { BatchedCustomWriter } from "../storage/batched-custom-writer.js";
+import { DEFAULT_AUDIT_COLUMN_MAP } from "../storage/column-map.js";
 import { AuditWriter } from "../storage/writer.js";
 import { AuditContextManager } from "./context.js";
 import { createInterceptedDb } from "./interceptor.js";
@@ -78,6 +80,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
       // Use batch writer (standard)
       this.batchWriter = new BatchAuditWriter(db, {
         auditTable: this.config.auditTable,
+        auditColumnMap: this.config.auditColumnMap,
         batchSize: this.config.batch.batchSize,
         flushInterval: this.config.batch.flushInterval,
         strictMode: this.config.strictMode,
@@ -109,6 +112,21 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
     if (config.tables !== "*" && config.tables.length === 0) {
       throw new Error("tables array cannot be empty. Use '*' for all tables.");
     }
+
+    this.validateColumnMap(config.auditColumnMap);
+  }
+
+  private validateColumnMap(map: AuditColumnMap): void {
+    const seen = new Set<string>();
+    for (const name of Object.values(map)) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+        throw new Error(`Invalid auditColumnMap identifier: ${name}`);
+      }
+      if (seen.has(name)) {
+        throw new Error(`auditColumnMap has duplicate column name: ${name}`);
+      }
+      seen.add(name);
+    }
   }
 
   /**
@@ -129,6 +147,8 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
       fields: config.fields || {},
       excludeFields: config.excludeFields || ["password", "token", "secret", "apiKey"],
       auditTable: config.auditTable || "audit_logs",
+      // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
+      auditColumnMap: { ...DEFAULT_AUDIT_COLUMN_MAP, ...(config.auditColumnMap || {}) },
       strictMode: config.strictMode ?? false,
       getUserId: config.getUserId || (() => undefined),
       getMetadata: config.getMetadata || (() => ({})),

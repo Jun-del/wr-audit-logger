@@ -3,7 +3,7 @@ import type { AuditContext, NormalizedConfig } from "../types/config.js";
 import { sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { mergeMetadata } from "../utils/metadata.js";
-import { safeSerialize } from "../utils/serializer.js";
+import { getAuditInsertColumns } from "./column-map.js";
 
 /**
  * Writes audit logs to the database
@@ -48,40 +48,31 @@ export class AuditWriter {
    */
   private async insertAuditLogs(entries: AuditLogEntry[]): Promise<void> {
     const tableName = this.config.auditTable;
+    const columns = getAuditInsertColumns(this.config.auditColumnMap);
 
     // Build values for bulk insert
-    const values = entries.map((entry) => ({
-      user_id: entry.userId || null,
-      ip_address: entry.ipAddress || null,
-      user_agent: entry.userAgent || null,
-      action: entry.action,
-      table_name: entry.tableName,
-      record_id: entry.recordId,
-      values: entry.values ? safeSerialize(entry.values) : null,
-      metadata: entry.metadata ? safeSerialize(entry.metadata) : null,
-      transaction_id: entry.transactionId || null,
-    }));
+    const values = entries.map((entry) => {
+      const row: Record<string, unknown> = {};
+      for (const column of columns) {
+        row[column.name] = column.getValue(entry);
+      }
+      return row;
+    });
 
     // Use raw SQL for bulk insert with JSONB
+    const insertColumns = sql.join(
+      columns.map((column) => sql.identifier(column.name)),
+      sql`, `,
+    );
+    const recordsetColumns = columns.map((column) => `"${column.name}" ${column.type}`).join(", ");
+
     await this.db.execute(sql`
       INSERT INTO ${sql.identifier(tableName)} (
-        user_id, ip_address, user_agent, action, table_name, record_id,
-        "values", metadata, transaction_id
+        ${insertColumns}
       )
       SELECT
-        user_id, ip_address, user_agent, action, table_name, record_id,
-        "values", metadata, transaction_id
-      FROM jsonb_to_recordset(${JSON.stringify(values)}::jsonb) AS t(
-        user_id VARCHAR,
-        ip_address VARCHAR,
-        user_agent TEXT,
-        action VARCHAR,
-        table_name VARCHAR,
-        record_id VARCHAR,
-        "values" JSONB,
-        metadata JSONB,
-        transaction_id VARCHAR
-      )
+        ${insertColumns}
+      FROM jsonb_to_recordset(${JSON.stringify(values)}::jsonb) AS t(${sql.raw(recordsetColumns)})
     `);
   }
 }
