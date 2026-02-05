@@ -126,16 +126,13 @@ export class BatchedCustomWriter {
     // Check queue size BEFORE any async operations
     const shouldFlushNow = this.queue.length >= this.config.batchSize;
 
-    // Trigger flush if queue is full
-    if (shouldFlushNow) {
+    // Trigger flush if queue is full, or if caller expects sync semantics
+    if (shouldFlushNow || this.config.waitForWrite || this.config.strictMode) {
       const flushPromise = this.flush();
 
       // Log errors instead of silently swallowing
       flushPromise.catch((error) => {
         this.logError("[AUDIT] Custom writer flush failed:", error);
-        if (this.config.strictMode) {
-          throw error;
-        }
       });
 
       if (this.config.strictMode || this.config.waitForWrite) {
@@ -143,8 +140,7 @@ export class BatchedCustomWriter {
       }
     }
 
-    const shouldAwaitPromises =
-      this.config.strictMode || (this.config.waitForWrite && shouldFlushNow);
+    const shouldAwaitPromises = this.config.strictMode || this.config.waitForWrite;
 
     if (!shouldAwaitPromises) {
       // Log errors instead of completely swallowing them

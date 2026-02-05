@@ -34,4 +34,34 @@ describe("BatchedCustomWriter", () => {
     onSpy.mockRestore();
     offSpy.mockRestore();
   });
+
+  it("flushes immediately when waitForWrite is true even if batch not full", async () => {
+    const customWriter = vi.fn(async () => {});
+
+    const config = {
+      batchSize: 10,
+      maxQueueSize: 100,
+      flushInterval: 60000,
+      strictMode: false,
+      waitForWrite: true,
+      logError: () => {},
+    };
+
+    const writer = new BatchedCustomWriter(customWriter, config);
+
+    await writer.queueAuditLogs(
+      [
+        {
+          action: "INSERT",
+          tableName: "users",
+          recordId: "1",
+        },
+      ],
+      { userId: "u1" },
+    );
+
+    expect(customWriter).toHaveBeenCalledTimes(1);
+
+    await writer.shutdown();
+  });
 });

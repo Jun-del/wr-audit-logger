@@ -131,8 +131,11 @@ describe("Batch Mode with Custom Writer", () => {
       await db.insert(testUsers).values({ email: "user2@example.com", name: "User 2" });
       await db.insert(testUsers).values({ email: "user3@example.com", name: "User 3" });
 
-      // Should auto-flush (waitForWrite: true)
-      expect(writeCalls.length).toBe(1);
+      // waitForWrite: true -> flush each write even if batch not full
+      expect(writeCalls.length).toBe(3);
+      writeCalls.forEach((call) => {
+        expect(call.logs.length).toBe(1);
+      });
       expect(customLogs.length).toBe(3);
 
       await auditLogger.shutdown();
