@@ -1,5 +1,11 @@
 # wr-audit-logger
 
+## 0.2.1
+
+### Patch Changes
+
+- ed73527: Fix batched custom writer waitForWrite behavior; add coverage for update returning projection
+
 ## 0.2.0
 
 ### Minor Changes
