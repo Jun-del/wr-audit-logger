@@ -46,8 +46,10 @@ async function main() {
     }),
   });
 
+  const { db: auditedDb, setContext } = auditLogger;
+
   // Set context (e.g., from Express middleware)
-  auditLogger.setContext({
+  setContext({
     userId: "user-123",
     ipAddress: "192.168.1.1",
     userAgent: "Mozilla/5.0...",
@@ -55,7 +57,7 @@ async function main() {
 
   console.log("\n--- INSERT Example ---");
   // Insert a user
-  const [newUser] = await db
+  const [newUser] = await auditedDb
     .insert(users)
     .values({
       email: "john@example.com",
@@ -65,40 +67,25 @@ async function main() {
     .returning();
 
   console.log("Created user:", newUser);
-
-  // Log the insert
-  await auditLogger.logInsert("users", newUser);
-  console.log("✓ Audit log created for INSERT");
+  console.log("✓ Audit log created automatically");
 
   console.log("\n--- UPDATE Example ---");
-  // Capture before state
-  const [userBefore] = await db.select().from(users).where(eq(users.id, newUser.id));
-
   // Update the user
-  const [updatedUser] = await db
+  const [updatedUser] = await auditedDb
     .update(users)
     .set({ name: "John Smith" })
     .where(eq(users.id, newUser.id))
     .returning();
 
   console.log("Updated user:", updatedUser);
-
-  // Log the update
-  await auditLogger.logUpdate("users", userBefore, updatedUser);
-  console.log("✓ Audit log created for UPDATE");
+  console.log("✓ Audit log created with before/after values");
 
   console.log("\n--- DELETE Example ---");
-  // Capture before delete
-  const [userToDelete] = await db.select().from(users).where(eq(users.id, newUser.id));
-
   // Delete the user
-  await db.delete(users).where(eq(users.id, newUser.id));
+  await auditedDb.delete(users).where(eq(users.id, newUser.id));
 
-  console.log("Deleted user:", userToDelete);
-
-  // Log the delete
-  await auditLogger.logDelete("users", userToDelete);
-  console.log("✓ Audit log created for DELETE");
+  console.log("Deleted user");
+  console.log("✓ Audit log created automatically");
 
   console.log("\n--- With Context Example ---");
   // Run operation with specific context

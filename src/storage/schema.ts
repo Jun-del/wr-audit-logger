@@ -5,7 +5,6 @@ import { bigserial, index, jsonb, pgTable, text, timestamp, varchar } from "driz
  * Audit logs table schema
  * Stores all database operation audit trails
  */
-// TODO: Flexible structure, defined by the user given schema if provided, else default?
 const DEFAULT_TABLE_NAME = "audit_logs";
 
 const DEFAULT_COLUMN_MAP: AuditColumnMap = {

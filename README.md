@@ -241,6 +241,104 @@ interface AuditContext {
 }
 ```
 
+## Usage patterns
+
+### 1) Default auto-audit (recommended)
+
+```ts
+const auditLogger = createAuditLogger(db, {
+  tables: "*",
+  excludeFields: ["password", "token"],
+  getUserId: () => getCurrentUser()?.id,
+});
+
+const { db: auditedDb } = auditLogger;
+await auditedDb.insert(users).values({ ... });
+```
+
+### 2) Custom audit table name / column names
+
+```ts
+await db.execute(
+  createAuditTableSQLFor("my_audit_logs", {
+    columnMap: { userId: "actor_id", tableName: "resource" },
+  }),
+);
+
+const auditLogger = createAuditLogger(db, {
+  tables: "*",
+  auditTable: "my_audit_logs",
+  auditColumnMap: { userId: "actor_id", tableName: "resource" },
+});
+```
+
+### 3) Custom table + extra columns
+
+```ts
+export const auditLogs = createAuditLogsTable("audit_logs", {
+  companyId: varchar("company_id", { length: 255 }).notNull(),
+});
+
+const auditLogger = createAuditLogger(db, {
+  tables: "*",
+  // built-in writer still writes only standard columns
+});
+```
+
+If you need to write extra columns, use `customWriter` (next section).
+
+### 4) Custom storage (full control)
+
+```ts
+const auditLogger = createAuditLogger(db, {
+  tables: "*",
+  customWriter: async (logs, context) => {
+    await db.insert(myAuditTable).values(
+      logs.map((log) => ({
+        company_id: getCompanyId(),
+        user_id: context?.userId,
+        action: log.action,
+        table_name: log.tableName,
+        record_id: log.recordId,
+        "values": log.values,
+        metadata: log.metadata,
+      })),
+    );
+  },
+});
+```
+
+### 5) Batch mode (async, high throughput)
+
+```ts
+const auditLogger = createAuditLogger(db, {
+  tables: "*",
+  batch: { batchSize: 200, flushInterval: 1000 },
+});
+```
+
+### 6) Manual logging (edge cases)
+
+```ts
+const auditLogger = createAuditLogger(db, { tables: ["users"] });
+await auditLogger.log({
+  action: "READ",
+  tableName: "users",
+  recordId: "1",
+  values: { ... },
+});
+```
+
+### 7) Type-safe schema usage
+
+```ts
+const schema = { users, vehicles };
+const auditLogger = createAuditLogger(db as PostgresJsDatabase<typeof schema>, {
+  tables: ["users"],
+  fields: { users: ["id", "email"] },
+});
+```
+
 Defaults (if omitted):
 
 - `excludeFields`: `["password", "token", "secret", "apiKey"]`
