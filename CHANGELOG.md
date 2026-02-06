@@ -1,5 +1,11 @@
 # wr-audit-logger
 
+## 0.2.3
+
+### Patch Changes
+
+- 1172f5e: Augment partial returning({ ... }) to full returning for audit; preserve user result shape.
+
 ## 0.2.2
 
 ### Patch Changes

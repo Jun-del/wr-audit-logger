@@ -1,6 +1,6 @@
 {
   "name": "wr-audit-logger",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Automatic audit logging for PostgreSQL",
   "keywords": [
     "audit-log",
