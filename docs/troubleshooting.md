@@ -426,6 +426,17 @@ The library tries to extract the primary key from these fields (in order):
 **Solution 2: Custom serialization**
 Modify `extractPrimaryKey` in `src/utils/primary-key.ts` for your schema.
 
+**Solution 3: Primary key map**
+
+```typescript
+const auditLogger = createAuditLogger(db, {
+  tables: ["electricity_bill"],
+  primaryKeyMap: {
+    electricity_bill: "jobid",
+  },
+});
+```
+
 ### Problem: No changed fields in UPDATE logs
 
 **Symptom:** UPDATE logs show full rows; you can't tell which fields changed.

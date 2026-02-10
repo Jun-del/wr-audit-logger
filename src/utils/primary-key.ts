@@ -2,7 +2,17 @@
  * Extract primary key from a record
  * Handles various PK formats: single, composite, UUID, etc.
  */
-export function extractPrimaryKey(record: Record<string, unknown>, tableName: string): string {
+export function extractPrimaryKey(
+  record: Record<string, unknown>,
+  tableName: string,
+  primaryKeyMap?: Record<string, string | string[]>,
+): string {
+  const configuredKey = primaryKeyMap?.[tableName];
+  if (configuredKey) {
+    const configured = extractConfiguredPrimaryKey(record, configuredKey);
+    if (configured != null) return configured;
+  }
+
   // Try common primary key field names
   const commonPkFields = ["id", `${tableName}_id`, "uuid", "pk"];
 
@@ -31,8 +41,29 @@ export function extractPrimaryKey(record: Record<string, unknown>, tableName: st
 export function extractPrimaryKeys(
   records: Record<string, unknown>[],
   tableName: string,
+  primaryKeyMap?: Record<string, string | string[]>,
 ): string[] {
-  return records.map((record) => extractPrimaryKey(record, tableName));
+  return records.map((record) => extractPrimaryKey(record, tableName, primaryKeyMap));
+}
+
+function extractConfiguredPrimaryKey(
+  record: Record<string, unknown>,
+  key: string | string[],
+): string | null {
+  const keys = Array.isArray(key) ? key : [key];
+  const resolved: Record<string, unknown> = {};
+
+  for (const field of keys) {
+    const value = record[field];
+    if (value == null) return null;
+    resolved[field] = value;
+  }
+
+  if (keys.length === 1 && keys[0]) {
+    return String(resolved[keys[0]]);
+  }
+
+  return safeStringifyForPK(resolved);
 }
 
 /**

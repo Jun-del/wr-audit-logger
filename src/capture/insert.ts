@@ -14,7 +14,7 @@ export function createInsertAuditLogs(
   return insertedRecords.map((record) => ({
     action: "INSERT" as const,
     tableName,
-    recordId: extractPrimaryKey(record, tableName),
+    recordId: extractPrimaryKey(record, tableName, config.primaryKeyMap),
     values: filterFields(record, tableName, config),
   }));
 }

@@ -175,6 +175,9 @@ interface AuditConfig {
   // Specific fields per table (optional)
   fields?: Record<string, string[]>;
 
+  // Override primary key field(s) per table for recordId extraction
+  primaryKeyMap?: Record<string, string | string[]>;
+
   // Fields to exclude globally
   excludeFields?: string[];
 

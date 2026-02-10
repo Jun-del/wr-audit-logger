@@ -14,7 +14,7 @@ export function createDeleteAuditLogs(
   return deletedRecords.map((record) => ({
     action: "DELETE" as const,
     tableName,
-    recordId: extractPrimaryKey(record, tableName),
+    recordId: extractPrimaryKey(record, tableName, config.primaryKeyMap),
     values: filterFields(record, tableName, config),
   }));
 }

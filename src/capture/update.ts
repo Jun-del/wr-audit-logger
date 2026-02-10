@@ -23,7 +23,7 @@ export function createUpdateAuditLogs(
       logs.push({
         action: "UPDATE" as const,
         tableName,
-        recordId: extractPrimaryKey(after, tableName),
+        recordId: extractPrimaryKey(after, tableName, config.primaryKeyMap),
         values,
       });
     }
@@ -33,7 +33,7 @@ export function createUpdateAuditLogs(
   const beforeById = new Map<string, Record<string, unknown>>();
   for (const before of beforeRecords) {
     if (!before) continue;
-    beforeById.set(extractPrimaryKey(before, tableName), before);
+    beforeById.set(extractPrimaryKey(before, tableName, config.primaryKeyMap), before);
   }
 
   // Match before and after records by primary key
@@ -41,13 +41,13 @@ export function createUpdateAuditLogs(
     const after = afterRecords[i];
     if (!after) continue;
 
-    const before = beforeById.get(extractPrimaryKey(after, tableName));
+    const before = beforeById.get(extractPrimaryKey(after, tableName, config.primaryKeyMap));
     if (!before) {
       const values = filterFields(after, tableName, config);
       logs.push({
         action: "UPDATE" as const,
         tableName,
-        recordId: extractPrimaryKey(after, tableName),
+        recordId: extractPrimaryKey(after, tableName, config.primaryKeyMap),
         values,
       });
       continue;
@@ -62,7 +62,7 @@ export function createUpdateAuditLogs(
       logs.push({
         action: "UPDATE" as const,
         tableName,
-        recordId: extractPrimaryKey(after, tableName),
+        recordId: extractPrimaryKey(after, tableName, config.primaryKeyMap),
         values: changedValues,
       });
     }

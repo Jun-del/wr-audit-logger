@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createDeleteAuditLogs } from "../../src/capture/delete.js";
 import { createInsertAuditLogs } from "../../src/capture/insert.js";
 import { createUpdateAuditLogs } from "../../src/capture/update.js";
+import { DEFAULT_AUDIT_COLUMN_MAP } from "../../src/storage/column-map.js";
 
 describe("Capture Configuration (Unit Tests)", () => {
   let mockConfig: NormalizedConfig;
@@ -11,12 +12,16 @@ describe("Capture Configuration (Unit Tests)", () => {
     mockConfig = {
       tables: ["test_users"],
       fields: {},
+      primaryKeyMap: {},
       excludeFields: ["password"],
       auditTable: "audit_logs",
+      auditColumnMap: DEFAULT_AUDIT_COLUMN_MAP,
       strictMode: false,
       getUserId: vi.fn().mockReturnValue(undefined),
       getMetadata: vi.fn().mockReturnValue({}),
+      logError: vi.fn(),
       updateValuesMode: "full",
+      batch: null,
       customWriter: undefined,
     };
   });
@@ -210,6 +215,44 @@ describe("Capture Configuration (Unit Tests)", () => {
 
       expect(logs).toHaveLength(3);
       expect(logs.map((l) => l.recordId)).toEqual(["1", "2", "3"]);
+    });
+  });
+
+  describe("Primary key overrides", () => {
+    it("should use primaryKeyMap for recordId", () => {
+      mockConfig.primaryKeyMap = { electricity_bill: "jobid" };
+      const records = [{ jobid: "job-1", amount: 100 }];
+
+      const logs = createInsertAuditLogs("electricity_bill", records, mockConfig);
+
+      expect(logs[0].recordId).toBe("job-1");
+    });
+
+    it("should match updates using configured primary key", () => {
+      mockConfig.primaryKeyMap = { electricity_bill: "jobid" };
+      mockConfig.updateValuesMode = "changed";
+      const beforeRecords = [{ jobid: "job-1", amount: 100 }];
+      const afterRecords = [{ jobid: "job-1", amount: 120 }];
+
+      const logs = createUpdateAuditLogs(
+        "electricity_bill",
+        beforeRecords,
+        afterRecords,
+        mockConfig,
+      );
+
+      expect(logs).toHaveLength(1);
+      expect(logs[0].recordId).toBe("job-1");
+      expect(logs[0].values).toEqual({ amount: 120 });
+    });
+
+    it("should support composite primary keys", () => {
+      mockConfig.primaryKeyMap = { ledger: ["org_id", "entry_id"] };
+      const records = [{ org_id: 7, entry_id: "e-9", amount: 50 }];
+
+      const logs = createInsertAuditLogs("ledger", records, mockConfig);
+
+      expect(logs[0].recordId).toBe('{"org_id":7,"entry_id":"e-9"}');
     });
   });
 

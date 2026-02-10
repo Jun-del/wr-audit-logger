@@ -30,6 +30,10 @@ export type AuditFieldConfig<TSchema extends Record<string, unknown>> = {
   [K in AuditTableName<TSchema>]?: Array<keyof TableColumns<SchemaTable<TSchema, K>> & string>;
 };
 
+export type AuditPrimaryKeyMap<TSchema extends Record<string, unknown>> = Partial<
+  Record<AuditTableName<TSchema> | (string & {}), string | string[]>
+>;
+
 export type AuditColumnKey =
   | "id"
   | "userId"
@@ -63,6 +67,13 @@ export interface AuditConfig<TSchema extends Record<string, unknown> = Record<st
    * @example { users: ['id', 'email', 'role'], vehicles: ['id', 'make', 'model'] }
    */
   fields?: AuditFieldConfig<TSchema>;
+
+  /**
+   * Override primary key field(s) per table for recordId extraction.
+   * Supports single or composite keys.
+   * @example { electricity_bill: "jobid", ledger: ["org_id", "entry_id"] }
+   */
+  primaryKeyMap?: AuditPrimaryKeyMap<TSchema>;
 
   /**
    * Fields to exclude from audit logs globally (e.g., passwords, tokens)

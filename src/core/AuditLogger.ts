@@ -124,7 +124,35 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
       throw new Error("tables array cannot be empty. Use '*' for all tables.");
     }
 
+    this.validatePrimaryKeyMap(config);
     this.validateColumnMap(config.auditColumnMap);
+  }
+
+  private validatePrimaryKeyMap(config: NormalizedConfig<TSchema>): void {
+    const map = config.primaryKeyMap;
+    if (!map) return;
+
+    for (const [table, key] of Object.entries(map)) {
+      if (config.tables !== "*" && !(config.tables as readonly string[]).includes(table)) {
+        throw new Error(`primaryKeyMap references unknown table: ${table}`);
+      }
+
+      if (typeof key === "string") {
+        if (!key.trim()) {
+          throw new Error(`primaryKeyMap has empty key for table: ${table}`);
+        }
+        continue;
+      }
+
+      if (Array.isArray(key)) {
+        if (key.length === 0 || key.some((value) => !value || !value.trim())) {
+          throw new Error(`primaryKeyMap has empty key in list for table: ${table}`);
+        }
+        continue;
+      }
+
+      throw new Error(`primaryKeyMap must be string or string[] for table: ${table}`);
+    }
   }
 
   private validateColumnMap(map: AuditColumnMap): void {
@@ -157,6 +185,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
     return {
       tables: config.tables,
       fields: config.fields || {},
+      primaryKeyMap: config.primaryKeyMap || {},
       excludeFields: config.excludeFields || ["password", "token", "secret", "apiKey"],
       auditTable: config.auditTable || "audit_logs",
       // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
