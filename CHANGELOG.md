@@ -1,5 +1,11 @@
 # wr-audit-logger
 
+## 0.3.1
+
+### Patch Changes
+
+- e760e24: Type tables config so each table primaryKey only accepts that table's schema column names.
+
 ## 0.3.0
 
 ### Minor Changes
