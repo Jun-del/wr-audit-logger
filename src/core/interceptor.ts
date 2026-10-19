@@ -1,6 +1,6 @@
-import type { AuditLogger } from "./AuditLogger.js";
 import { getTableName, isTable } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type { AuditLogger } from "./AuditLogger.js";
 
 // Enable debug logging via environment variable
 const DEBUG = process.env.AUDIT_DEBUG === "true";

@@ -55,8 +55,8 @@ await db.execute(
 Drizzle table helper with a custom table name and extra columns:
 
 ```ts
-import { createAuditLogsTable } from "wr-audit-logger";
 import { varchar } from "drizzle-orm/pg-core";
+import { createAuditLogsTable } from "wr-audit-logger";
 
 export const auditLogs = createAuditLogsTable("my_audit_logs", {
   companyId: varchar("company_id", { length: 255 }),
@@ -489,8 +489,8 @@ await auditedDb.transaction(async (tx) => {
 ## Querying audit logs
 
 ```ts
-import { auditLogs } from "wr-audit-logger";
 import { eq, desc } from "drizzle-orm";
+import { auditLogs } from "wr-audit-logger";
 
 // History for a specific record
 const history = await auditedDb

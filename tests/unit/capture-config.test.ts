@@ -1,9 +1,9 @@
-import type { NormalizedConfig } from "../../src/types/config.js";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createDeleteAuditLogs } from "../../src/capture/delete.js";
 import { createInsertAuditLogs } from "../../src/capture/insert.js";
 import { createUpdateAuditLogs } from "../../src/capture/update.js";
 import { DEFAULT_AUDIT_COLUMN_MAP } from "../../src/storage/column-map.js";
+import type { NormalizedConfig } from "../../src/types/config.js";
 
 describe("Capture Configuration (Unit Tests)", () => {
   let mockConfig: NormalizedConfig;

@@ -303,8 +303,8 @@ console.log(ready);
 Inspect recent rows with the exported audit table:
 
 ```ts
-import { auditLogs } from "wr-audit-logger";
 import { desc } from "drizzle-orm";
+import { auditLogs } from "wr-audit-logger";
 
 const logs = await db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(10);
 ```

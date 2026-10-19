@@ -1,11 +1,11 @@
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { AuditLogger } from "./core/AuditLogger.js";
 import type {
   AuditConfig,
   AuditContext,
   AuditTableName,
   AuditTableRecord,
 } from "./types/config.js";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { AuditLogger } from "./core/AuditLogger.js";
 
 // Re-export types
 export type {

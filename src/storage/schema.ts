@@ -1,5 +1,5 @@
-import type { AuditColumnMap } from "../types/config.js";
 import { bigserial, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import type { AuditColumnMap } from "../types/config.js";
 
 /**
  * Audit logs table schema
