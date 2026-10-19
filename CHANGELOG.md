@@ -1,5 +1,15 @@
 # wr-audit-logger
 
+## 0.4.0
+
+### Minor Changes
+
+- cb049f0: Support drizzle-orm 1.x (`^1.0.0-rc.4`) alongside 0.45. On 1.x, table names and columns are type-checked against the tables in `relations`. `createAuditLogger` now infers types from the database instance, and its returned `db` has the same type as the one passed in.
+
+### Patch Changes
+
+- afe8b52: Require drizzle-orm `^0.45.2` as a peer dependency. Earlier 0.45.x releases have a SQL injection advisory for improperly escaped SQL identifiers.
+
 ## 0.3.1
 
 ### Patch Changes
