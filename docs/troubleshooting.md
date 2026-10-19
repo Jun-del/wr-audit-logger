@@ -1,632 +1,320 @@
-# Troubleshooting Guide
+# Troubleshooting
 
-Common issues and solutions for wr-audit-logger.
+## Installation and setup
 
-## Table of Contents
+### Package or peer dependency not found
 
-- [Installation Issues](#installation-issues)
-- [Setup Issues](#setup-issues)
-- [Runtime Issues](#runtime-issues)
-- [Performance Issues](#performance-issues)
-- [Data Issues](#data-issues)
-- [Integration Issues](#integration-issues)
-
-## Installation Issues
-
-### Problem: Package not found
+Install the package, Drizzle ORM, and the driver used by your application.
 
 ```bash
-npm ERR! 404 Not Found - GET https://registry.npmjs.org/wr-audit-logger
+pnpm add wr-audit-logger drizzle-orm postgres
 ```
 
-**Solution:**
+For node-postgres, install pg instead of postgres:
 
 ```bash
-# Use correct package name
-pnpm add wr-audit-logger
-
-# Or check if published
-npm view wr-audit-logger
+pnpm add wr-audit-logger drizzle-orm pg
 ```
 
-### Problem: Peer dependency warnings
+### The audit table does not exist
 
-```bash
-npm WARN wr-audit-logger@1.0.0 requires a peer of drizzle-orm@^0.45.1
-```
+Run the initializer once:
 
-**Solution:**
-
-```bash
-# Install required peer dependencies
-pnpm add drizzle-orm@^0.45.1 pg@^8.17.2
-```
-
-## Setup Issues
-
-### Problem: Audit table doesn't exist
-
-```
-Error: relation "audit_logs" does not exist
-```
-
-**Solution:**
-
-```typescript
+```ts
 import { initializeAuditLogging } from "wr-audit-logger";
 
-// Run this once to create the table
 await initializeAuditLogging(db);
 ```
 
-Or run the SQL manually:
+For a custom table name, pass tableName and the same column map used by the
+logger.
 
-```typescript
-import { createAuditTableSQL, createAuditTableSQLFor } from "wr-audit-logger";
+### A migration fails
 
-await db.execute(createAuditTableSQL); // default table name
-// or custom table name
-await db.execute(createAuditTableSQLFor("my_audit_logs"));
-// or custom column names
-await db.execute(
-  createAuditTableSQLFor("my_audit_logs", {
-    columnMap: { userId: "actor_id", tableName: "resource" },
-  }),
-);
-```
-
-### Problem: Migration fails
-
-```
-Error: column "values" does not exist
-```
-
-**Solution:**
+Inspect the current table before changing it:
 
 ```sql
--- Check current table structure
 \d audit_logs
-
--- Drop and recreate (CAUTION: This deletes data!)
-DROP TABLE IF EXISTS audit_logs CASCADE;
-
--- Then reinitialize
 ```
 
-```typescript
-await initializeAuditLogging(db);
-```
+Apply a migration that adds or changes the missing column. Do not drop
+audit_logs in production unless you have exported the data and accepted the
+loss. The initializer creates the table and indexes, but it is not a general
+schema migration tool.
 
-### Problem: Permission denied
+### Permission denied
 
-```
-Error: permission denied for table audit_logs
-```
-
-**Solution:**
+Grant the application role access to the audit table and its sequence:
 
 ```sql
--- Grant permissions to your app user
 GRANT INSERT, SELECT ON audit_logs TO your_app_user;
 GRANT USAGE, SELECT ON SEQUENCE audit_logs_id_seq TO your_app_user;
 ```
 
-## Runtime Issues
+Use the sequence name that belongs to your custom table and ID column.
 
-### Problem: Operations not being audited
+## Runtime issues
 
-**Symptom:** Database operations complete, but no audit logs are created.
+### No audit logs are created
 
-**Checklist:**
+Check both conditions:
 
-1. Are you using the wrapped `db`?
+1. Use the wrapped database.
 
-   ```typescript
-   const { db: auditedDb } = auditLogger;
-   await auditedDb.insert(users).values(data); // ✓
-   // NOT:
-   await db.insert(users).values(data); // ✗
-   ```
-
-2. Is the table in your config?
-
-   ```typescript
-   const auditLogger = createAuditLogger(db, {
-     tables: { users: { primaryKey: "id" } }, // Must include the table!
-   });
-   ```
-
-3. Check `shouldAudit` method:
-   ```typescript
-   console.log(auditLogger.shouldAudit("users")); // Should be true
-   ```
-
-### Problem: `.returning()` called explicitly throws error
-
-**Symptom:**
-
-```
-Error: .returning() has already been called
-```
-
-**Explanation:**
-Auto-injection adds `.returning()` automatically. If you call it explicitly AND it's auto-injected, you'll get an error.
-
-**Solution:**
-Don't call `.returning()` explicitly. The wrapper handles it:
-
-```typescript
-// ✗ Don't do this:
-await auditedDb.insert(users).values(data).returning();
-
-// ✓ Do this:
+```ts
+const { db: auditedDb } = auditLogger;
 await auditedDb.insert(users).values(data);
-
-// ✓ Or this (if you need the data):
-const result = await auditedDb.insert(users).values(data);
-// result will have the data from auto-injected .returning()
 ```
 
-### Problem: Context not being captured
+The original db bypasses the interceptor.
 
-**Symptom:** `userId`, `ipAddress` are `null` in audit logs.
+2. Add the table to the logger configuration.
 
-**Solution 1: Set context**
+```ts
+const auditLogger = createAuditLogger(db, {
+  tables: { users: { primaryKey: "id" } },
+});
+```
 
-```typescript
+The logger ignores mutations on tables that are not in tables.
+
+### Return values are different
+
+The wrapper adds RETURNING when an INSERT, UPDATE, or DELETE query does not
+have one. The result can therefore contain rows instead of the driver's
+usual mutation metadata.
+
+An explicit returning() call works. A selected return shape also works. The
+logger reads the full row for audit capture and returns the selected fields to
+your code.
+
+### Context fields are null
+
+Set context before the database operation:
+
+```ts
 auditLogger.setContext({
-  userId: getCurrentUser().id,
+  userId: getCurrentUser()?.id,
   ipAddress: req.ip,
   userAgent: req.headers["user-agent"],
 });
 ```
 
-**Solution 2: Use middleware**
+You can also provide getUserId or use withContext for jobs and scripts.
 
-```typescript
-// Express
-app.use((req, res, next) => {
-  auditLogger.setContext({
-    userId: req.user?.id,
-    ipAddress: req.ip,
-    userAgent: req.get("user-agent"),
-  });
-  next();
-});
-```
+### Transaction IDs are missing or different
 
-**Solution 3: Use `getUserId` config**
+Use the wrapped transaction passed to the callback:
 
-```typescript
-const auditLogger = createAuditLogger(db, {
-  tables: { users: { primaryKey: "id" } },
-  getUserId: () => {
-    // Return current user ID from your auth system
-    return getCurrentUser()?.id;
-  },
-});
-```
-
-### Problem: Transactions don't share transaction ID
-
-**Symptom:** Operations in same transaction have different `transaction_id`.
-
-**Solution:**
-Make sure you're using the wrapped `tx` inside the transaction callback:
-
-```typescript
-// ✗ Wrong:
+```ts
 await auditedDb.transaction(async (tx) => {
-  // Using original 'db' - won't work!
-  await db.insert(users).values(data);
-});
-
-// ✓ Correct:
-await auditedDb.transaction(async (tx) => {
-  // Using wrapped 'tx' from callback
   await tx.insert(users).values(data);
 });
 ```
 
-## Performance Issues
+Do not use the original db inside the callback. Operations in the wrapped
+transaction share a generated transaction_id. Audit inserts use the logger's
+database connection, not tx, so they do not roll back with the transaction.
 
-### Problem: Slow INSERT/UPDATE/DELETE operations
+## Performance issues
 
-**Symptom:** Operations take 50ms+ each.
+### Mutations are slow
 
-**Diagnosis:**
+Measure the operation and the audit write separately if possible. Then check:
 
-```typescript
-const start = Date.now();
-await auditedDb.insert(users).values(data);
-console.log(`Took: ${Date.now() - start}ms`);
+- updateValuesMode is "changed", which adds a before-state SELECT when a WHERE
+  clause is available
+- batch mode is enabled for audit writes
+- the audit table has its expected indexes
+- the database connection and network latency
+
+Use full update mode when the after row is enough:
+
+```ts
+const auditLogger = createAuditLogger(db, {
+  tables: { users: { primaryKey: "id" } },
+  updateValuesMode: "full",
+});
 ```
 
-**Solutions:**
+Use fields or excludeFields to reduce the audit payload.
 
-1. **Enable batch mode:**
+### The queue grows
 
-   ```typescript
-   const auditLogger = createAuditLogger(db, {
-     tables: { users: { primaryKey: "id" } },
-     batch: {
-       batchSize: 100,
-       flushInterval: 1000,
-       waitForWrite: false, // Async mode
-     },
-   });
-   ```
+Batch mode has a bounded queue. maxQueueSize defaults to 10,000. Once the
+limit is reached, adding logs fails. Non-strict mode reports the failure
+through logError and lets the application mutation continue. strictMode
+propagates the failure.
 
-2. **Use full update mode if changed fields not needed:**
+Check the queue and lower the flush interval or increase the batch size only
+if the database can handle larger writes:
 
-   ```typescript
-   const auditLogger = createAuditLogger(db, {
-     tables: { users: { primaryKey: "id" } },
-     updateValuesMode: "full", // Skip SELECT before UPDATE
-   });
-   ```
-
-3. **Audit specific fields only:**
-   ```typescript
-   const auditLogger = createAuditLogger(db, {
-     tables: { users: { primaryKey: "id" } },
-     fields: {
-       users: ["id", "email", "role"], // Only audit these fields
-     },
-   });
-   ```
-
-### Problem: Queue growing unbounded
-
-**Symptom:**
-
-```typescript
+```ts
 const stats = auditLogger.getStats();
-console.log(stats.queueSize); // Growing rapidly
+console.log(stats?.queueSize);
 ```
 
-**Solutions:**
+Also check database write errors. A larger queue only delays the failure and
+uses more memory.
 
-1. **Increase batch size:**
+### Memory use grows
 
-   ```typescript
-   batch: {
-     batchSize: 200,  // Larger batches
-   }
-   ```
+The queue stores pending audit entries, including their values and metadata.
+Reduce payload size with fields and excludeFields. Flush during bulk work and
+call shutdown during process termination.
 
-2. **Decrease flush interval:**
+Process large imports in chunks:
 
-   ```typescript
-   batch: {
-     flushInterval: 500,  // Flush more frequently (ms)
-   }
-   ```
+```ts
+const chunkSize = 1000;
 
-3. **Check database performance:**
-   ```sql
-   -- Check for long-running queries
-   SELECT pid, now() - query_start as duration, query
-   FROM pg_stat_activity
-   WHERE state = 'active'
-   ORDER BY duration DESC;
-   ```
-
-### Problem: High memory usage
-
-**Symptom:** Node.js process memory keeps growing.
-
-**Diagnosis:**
-
-```typescript
-const stats = auditLogger.getStats();
-console.log(`Queue size: ${stats.queueSize}`);
-// Large queue = high memory
+for (let i = 0; i < data.length; i += chunkSize) {
+  const chunk = data.slice(i, i + chunkSize);
+  await Promise.all(chunk.map((item) => auditedDb.insert(users).values(item)));
+  await auditLogger.flush();
+}
 ```
 
-**Solutions:**
+This is chunked processing, not streaming. The full data array is still in
+memory.
 
-1. **Reduce batch size:**
+## Data issues
 
-   ```typescript
-   batch: {
-     batchSize: 50,  // Smaller batches
-   }
-   ```
+### Sensitive fields appear in values
 
-2. **Flush manually in bulk operations:**
+Exclude them when creating the logger:
 
-   ```typescript
-   for (let i = 0; i < 10000; i++) {
-     await auditedDb.insert(users).values(data[i]);
-
-     if (i % 1000 === 0) {
-       await auditLogger.flush(); // Manual flush every 1000
-     }
-   }
-   ```
-
-3. **Use streaming for huge imports:**
-   ```typescript
-   // Process in chunks
-   const CHUNK_SIZE = 1000;
-   for (let i = 0; i < data.length; i += CHUNK_SIZE) {
-     const chunk = data.slice(i, i + CHUNK_SIZE);
-     await Promise.all(chunk.map((item) => auditedDb.insert(users).values(item)));
-     await auditLogger.flush();
-   }
-   ```
-
-## Data Issues
-
-### Problem: Sensitive data in audit logs
-
-**Symptom:** Password, tokens appear in `values`.
-
-**Solution:**
-
-```typescript
+```ts
 const auditLogger = createAuditLogger(db, {
   tables: { users: { primaryKey: "id" } },
   excludeFields: ["password", "token", "secret", "apiKey"],
 });
 ```
 
-### Problem: UPDATE logs store full rows
+Review custom fields and metadata too. The logger does not know which values
+are sensitive unless you configure them.
 
-**Symptom:** `values` includes all columns instead of only changed fields.
+### UPDATE logs contain full rows
 
-**Explanation:** `updateValuesMode` is set to `"full"`.
+Set updateValuesMode to "changed":
 
-**Solution:**
-
-```typescript
+```ts
 const auditLogger = createAuditLogger(db, {
   tables: { users: { primaryKey: "id" } },
-  updateValuesMode: "changed", // Store only changed fields
+  updateValuesMode: "changed",
 });
 ```
 
-### Problem: Missing `recordId`
+If the logger cannot capture the before state, it records the returned after
+row as a fallback.
 
-**Symptom:** `record_id` is `null` or incorrect.
+### record_id is wrong
 
-**Diagnosis:**
-`tables.<table>.primaryKey` is required for audited tables. `recordId` uses that mapping only.
+Set the primary key field for every audited table. For a composite key, pass
+an array:
 
-**Solution: configure table primary key**
-
-```typescript
+```ts
 const auditLogger = createAuditLogger(db, {
-  tables: { electricity_bill: { primaryKey: "jobid" } },
+  tables: {
+    electricity_bill: { primaryKey: "jobid" },
+    bill_line: { primaryKey: ["billId", "lineId"] },
+  },
 });
 ```
 
-### Problem: No changed fields in UPDATE logs
+## Integration issues
 
-**Symptom:** UPDATE logs show full rows; you can't tell which fields changed.
+### Raw SQL is not audited
 
-**Explanation:** This happens when `updateValuesMode: "full"`.
+The interceptor handles Drizzle INSERT, UPDATE, and DELETE query builders. It
+does not inspect raw SQL. Add a manual log after a statement that returns the
+affected rows:
 
-**Solution:**
+```ts
+import { sql } from "drizzle-orm";
 
-```typescript
-const auditLogger = createAuditLogger(db, {
-  tables: { users: { primaryKey: "id" } },
-  updateValuesMode: "changed", // Store only changed fields
-});
-```
-
-## Integration Issues
-
-### Problem: Doesn't work with raw SQL
-
-**Symptom:**
-
-```typescript
-await auditedDb.execute(sql`INSERT INTO users ...`);
-// No audit log created
-```
-
-**Explanation:**
-Auto-auditing only works with Drizzle's query builders (insert, update, delete).
-
-**Solution:**
-Use manual logging for raw SQL:
-
-```typescript
-const result = await auditedDb.execute(sql`INSERT INTO users ... RETURNING *`);
+const result = await auditedDb.execute(sql`INSERT INTO users (...) VALUES (...) RETURNING *`);
 await auditLogger.logInsert("users", result.rows);
 ```
 
-### Problem: Doesn't work with ORMs other than Drizzle
+The table must be configured in tables.
 
-**Symptom:**
+### Another ORM is not audited
 
-```typescript
-// Using Prisma, TypeORM, etc.
-await prisma.user.create({ data: { ... } });
-// No audit log
-```
+The package only intercepts Drizzle. With another ORM, write the change first
+and then call the manual logging method with the affected record.
 
-**Explanation:**
-This library is designed specifically for Drizzle ORM.
+### The wrapped database has a type error
 
-**Solution:**
+The wrapper keeps the Postgres Drizzle database type. Make sure the database
+and schema use the same driver type:
 
-1. Use manual logging:
-
-   ```typescript
-   const user = await prisma.user.create({ data });
-   await auditLogger.logInsert("users", user);
-   ```
-
-2. Or switch to Drizzle ORM
-
-### Problem: TypeScript errors with wrapped db
-
-**Symptom:**
-
-```typescript
-const { db: auditedDb } = auditLogger;
-// Type error: Property 'insert' does not exist
-```
-
-**Solution:**
-The wrapped db should maintain the same type. If not:
-
-```typescript
+```ts
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-const { db } = auditLogger;
-const auditedDb: PostgresJsDatabase<typeof schema> = db;
+const { db: auditedDb } = auditLogger;
+const typedDb: PostgresJsDatabase<typeof schema> = auditedDb;
 ```
 
-### Problem: Works in development, fails in production
+## Production checks
 
-**Checklist:**
+Confirm that DATABASE_URL is set and that the application role can write to
+the audit table.
 
-1. **Environment variables:**
+If the application needs a connection pool with node-postgres, create a Pool
+instead of a single Client:
 
-   ```typescript
-   // Make sure DATABASE_URL is set in production
-   console.log(process.env.DATABASE_URL);
-   ```
+```ts
+import { Pool } from "pg";
 
-2. **Database permissions:**
-
-   ```sql
-   -- Check if app user has INSERT on audit_logs
-   SELECT grantee, privilege_type
-   FROM information_schema.role_table_grants
-   WHERE table_name = 'audit_logs';
-   ```
-
-3. **Connection pool:**
-
-   ```typescript
-   // Production might need larger pool
-   const client = new Client({
-     connectionString: process.env.DATABASE_URL,
-     max: 20, // Increase pool size
-   });
-   ```
-
-4. **Timeouts:**
-   ```typescript
-   // Production might have stricter timeouts
-   batch: {
-     flushInterval: 500,  // Flush more frequently
-   }
-   ```
-
-## Error Messages
-
-### "BatchAuditWriter is shutting down"
-
-**Cause:** Trying to queue logs after calling `shutdown()`.
-
-**Solution:**
-
-```typescript
-// Don't use auditedDb after shutdown
-await auditLogger.shutdown();
-// await auditedDb.insert(...);  // ✗ Will fail
-
-// If you need to use it again, create a new instance
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,
+});
 ```
 
-### "Cannot read property 'returning' of undefined"
+Configure SQL and network timeouts in the database driver or database server.
+flushInterval controls when queued audit logs are flushed. It is not a SQL
+timeout.
 
-**Cause:** Query builder is undefined or malformed.
+## Errors and debugging
 
-**Solution:**
+After shutdown, the batch writer rejects new audit entries. Create a new
+logger if the process needs to resume writing.
 
-```typescript
-// ✗ Wrong:
-await auditedDb.insert();
-
-// ✓ Correct:
-await auditedDb.insert(users).values(data);
-```
-
-### "relation 'audit_logs' does not exist"
-
-**Solution:**
-
-```typescript
-await initializeAuditLogging(db);
-```
-
-## Debugging
-
-### Enable debug logging
-
-Set environment variable:
+Set AUDIT_DEBUG before starting the process:
 
 ```bash
-export AUDIT_DEBUG=true
+AUDIT_DEBUG=true node app.js
 ```
 
-```typescript
-// You'll see detailed logs like:
-// [AUDIT DEBUG] Intercepting INSERT on users via then
-// [AUDIT DEBUG] Auto-injecting .returning() for INSERT on users
-// [AUDIT DEBUG] Logging 1 INSERT operations
-```
+The debug output shows intercepted operations, table detection, RETURNING
+injection, and audit-log creation.
 
-### Check audit setup
+Check whether the audit table exists:
 
-```typescript
+```ts
 import { checkAuditSetup } from "wr-audit-logger";
 
-const isSetup = await checkAuditSetup(db);
-console.log("Audit system ready:", isSetup);
+const ready = await checkAuditSetup(db);
+console.log(ready);
 ```
 
-### Inspect audit logs
+Inspect recent rows with the exported audit table:
 
-```typescript
+```ts
 import { auditLogs } from "wr-audit-logger";
 import { desc } from "drizzle-orm";
 
 const logs = await db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(10);
-
-console.table(logs);
 ```
 
-### Monitor queue
+For custom table names or column maps, use your own Drizzle table definition.
 
-```typescript
-setInterval(() => {
-  const stats = auditLogger.getStats();
-  if (stats) {
-    console.log(`Queue: ${stats.queueSize}, Writing: ${stats.isWriting}`);
-  }
-}, 5000);
-```
+## Getting help
 
-## Getting Help
+When opening an issue, include the Node version, database version, smallest
+reproduction, error message, and relevant debug output. Examples are in
+examples/.
 
-If you're still stuck:
-
-1. **Check Examples:** Review [examples/](./examples/)
-2. **Check Issues:** Search [GitHub issues](https://github.com/Jun-del/wr-audit-log/issues)
-3. **Enable Debug:** Set `AUDIT_DEBUG=true`
-4. **Create Issue:** Include:
-   - Node version
-   - Database version
-   - Minimal reproduction code
-   - Error messages
-   - Debug output
-
-## Common Gotchas
-
-1. **Not using wrapped db** - Use `auditedDb` from `createAuditLogger`, not original `db`
-2. **Calling `.returning()` explicitly** - Auto-injected, don't call manually
-3. **Forgetting `updateValuesMode`** - Defaults to `"changed"`
-4. **Not calling `shutdown()`** - Always shutdown gracefully
-5. **Using raw SQL** - Use Drizzle query builders or manual logging
-6. **Wrong transaction usage** - Use wrapped `tx` from callback
-7. **Missing context** - Set context in middleware or config
-8. **Sensitive fields** - Remember to exclude them via `excludeFields`
+Issues: [github.com/Jun-del/wr-audit-logger](https://github.com/Jun-del/wr-audit-logger/issues)

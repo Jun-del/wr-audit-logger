@@ -20,6 +20,8 @@ const vehicles = pgTable("vehicles", {
   status: varchar("status", { length: 50 }),
 });
 
+const schema = { users, vehicles };
+
 async function main() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) {
@@ -29,15 +31,18 @@ async function main() {
   // Connect to database
   const client = new Client(process.env.DATABASE_URL);
   await client.connect();
-  const db = drizzle(client);
+  const db = drizzle(client, { schema });
 
   // Create audit table (run once)
   await db.execute(createAuditTableSQL);
-  console.log("✓ Audit table created");
+  console.log("Audit table created");
 
   // Create audit logger
   const auditLogger = createAuditLogger(db, {
-    tables: ["users", "vehicles"],
+    tables: {
+      users: { primaryKey: "id" },
+      vehicles: { primaryKey: "id" },
+    },
     excludeFields: ["password"],
     getUserId: () => "user-123", // In real app, get from auth context
     getMetadata: () => ({
@@ -67,7 +72,7 @@ async function main() {
     .returning();
 
   console.log("Created user:", newUser);
-  console.log("✓ Audit log created automatically");
+  console.log("Audit log created automatically");
 
   console.log("\n--- UPDATE Example ---");
   // Update the user
@@ -78,14 +83,14 @@ async function main() {
     .returning();
 
   console.log("Updated user:", updatedUser);
-  console.log("✓ Audit log created with before/after values");
+  console.log("Audit log created with before/after values");
 
   console.log("\n--- DELETE Example ---");
   // Delete the user
   await auditedDb.delete(users).where(eq(users.id, newUser.id));
 
   console.log("Deleted user");
-  console.log("✓ Audit log created automatically");
+  console.log("Audit log created automatically");
 
   console.log("\n--- With Context Example ---");
   // Run operation with specific context
@@ -106,7 +111,7 @@ async function main() {
         .returning();
 
       await auditLogger.logInsert("vehicles", vehicle);
-      console.log("✓ Vehicle created and logged with admin context");
+      console.log("Vehicle created and logged with admin context");
     },
   );
 
