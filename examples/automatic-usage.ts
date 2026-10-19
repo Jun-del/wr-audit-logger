@@ -22,6 +22,8 @@ const vehicles = pgTable("vehicles", {
   ownerId: serial("owner_id"),
 });
 
+const schema = { users, vehicles };
+
 async function main() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) {
@@ -31,15 +33,18 @@ async function main() {
   // Connect to database
   const client = new Client(process.env.DATABASE_URL);
   await client.connect();
-  const originalDb = drizzle(client);
+  const originalDb = drizzle(client, { schema });
 
   // Create audit table (run once)
   await originalDb.execute(createAuditTableSQL);
-  console.log("✓ Audit table created");
+  console.log("Audit table created");
 
   // Create audit logger - get the wrapped db instance
   const auditLogger = createAuditLogger(originalDb, {
-    tables: ["users", "vehicles"],
+    tables: {
+      users: { primaryKey: "id" },
+      vehicles: { primaryKey: "id" },
+    },
     excludeFields: ["password"],
     getUserId: () => "user-123",
     getMetadata: () => ({
@@ -71,7 +76,7 @@ async function main() {
     .returning();
 
   console.log("Created user:", newUser);
-  console.log("✓ Audit log created AUTOMATICALLY");
+  console.log("Audit log created");
 
   console.log("\n--- AUTOMATIC UPDATE ---");
   // Update is automatically audited with before/after values
@@ -85,14 +90,14 @@ async function main() {
     .returning();
 
   console.log("Updated user:", updatedUser);
-  console.log("✓ Audit log with before/after values created AUTOMATICALLY");
+  console.log("Audit log with before/after values created");
 
   console.log("\n--- AUTOMATIC DELETE ---");
   // Delete is also automatically audited
   await db.delete(users).where(eq(users.id, newUser.id));
 
   console.log("Deleted user");
-  console.log("✓ Audit log created AUTOMATICALLY");
+  console.log("Audit log created");
 
   console.log("\n--- AUTOMATIC TRANSACTION ---");
   // Transactions work seamlessly - all operations share transaction_id
@@ -118,7 +123,7 @@ async function main() {
       .returning();
 
     console.log("Created user and vehicle in transaction");
-    console.log("✓ Both operations logged with same transaction_id");
+    console.log("Both operations logged with the same transaction_id");
   });
 
   console.log("\n--- BULK OPERATIONS ---");
@@ -133,7 +138,7 @@ async function main() {
     .returning();
 
   console.log(`Created ${newVehicles.length} vehicles`);
-  console.log("✓ Each vehicle logged automatically");
+  console.log("Each vehicle logged");
 
   console.log("\n--- WITH CONTEXT ---");
   // Use withContext for specific operations
@@ -145,7 +150,7 @@ async function main() {
     async () => {
       await db.update(vehicles).set({ status: "maintenance" }).where(eq(vehicles.status, "active"));
 
-      console.log("✓ Bulk update logged with admin context");
+      console.log("Bulk update logged with admin context");
     },
   );
 
@@ -181,7 +186,7 @@ async function main() {
   }
 
   await client.end();
-  console.log("\n✅ Demo complete - all operations were automatically audited!");
+  console.log("\nDemo complete. All operations were audited.");
 }
 
 main().catch(console.error);

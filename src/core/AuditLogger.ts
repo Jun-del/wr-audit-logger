@@ -1,5 +1,13 @@
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { createDeleteAuditLogs } from "../capture/delete.js";
+import { createInsertAuditLogs } from "../capture/insert.js";
+import { createUpdateAuditLogs } from "../capture/update.js";
 import type { BatchAuditWriterStats } from "../storage/batch-writer.js";
+import { BatchAuditWriter } from "../storage/batch-writer.js";
 import type { BatchedCustomWriterStats } from "../storage/batched-custom-writer.js";
+import { BatchedCustomWriter } from "../storage/batched-custom-writer.js";
+import { DEFAULT_AUDIT_COLUMN_MAP } from "../storage/column-map.js";
+import { AuditWriter } from "../storage/writer.js";
 import type { AuditLog } from "../types/audit.js";
 import type {
   AuditConfig,
@@ -9,14 +17,6 @@ import type {
   AuditTableRecord,
   NormalizedConfig,
 } from "../types/config.js";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { createDeleteAuditLogs } from "../capture/delete.js";
-import { createInsertAuditLogs } from "../capture/insert.js";
-import { createUpdateAuditLogs } from "../capture/update.js";
-import { BatchAuditWriter } from "../storage/batch-writer.js";
-import { BatchedCustomWriter } from "../storage/batched-custom-writer.js";
-import { DEFAULT_AUDIT_COLUMN_MAP } from "../storage/column-map.js";
-import { AuditWriter } from "../storage/writer.js";
 import { sanitizeError } from "../utils/logging.js";
 import { AuditContextManager } from "./context.js";
 import { createInterceptedDb } from "./interceptor.js";
@@ -61,7 +61,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * ```
    */
   constructor(
-    private db: PostgresJsDatabase<TSchema>,
+    private db: PostgresJsDatabase<any>,
     config: AuditConfig<TSchema>,
   ) {
     this.config = this.normalizeConfig(config);
@@ -217,7 +217,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * // Audit log created automatically
    * ```
    */
-  createAuditedDb(): PostgresJsDatabase<TSchema> {
+  createAuditedDb(): PostgresJsDatabase<any> {
     return createInterceptedDb(this.db, this);
   }
 

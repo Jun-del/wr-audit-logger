@@ -1,19 +1,26 @@
 # wr-audit-logger
 
-Automatic audit logging for **Drizzle ORM + PostgreSQL**.
-Track who changed what and when — **without manual logging calls**.
+Automatic audit logging for **Drizzle ORM and PostgreSQL**.
+Track who changed what and when without manual logging calls.
+
+> [!NOTE]
+> Most of this code was written and reviewed by AI. Use with caution.
 
 ## Installation
 
 ```bash
-pnpm add wr-audit-logger
+pnpm add wr-audit-logger drizzle-orm postgres
 # or
-npm install wr-audit-logger
+npm install wr-audit-logger drizzle-orm postgres
 # or
-yarn add wr-audit-logger
+yarn add wr-audit-logger drizzle-orm postgres
 ```
 
-## Quick Start
+The Quick Start uses the postgres driver. For node-postgres, install pg and use drizzle-orm/node-postgres instead.
+
+Supports drizzle-orm `^0.45.2` and `^1.0.0-rc.4`.
+
+## Quick start
 
 ### 1. Create the audit table
 
@@ -23,7 +30,7 @@ import postgres from "postgres";
 import { createAuditTableSQL } from "wr-audit-logger";
 
 const client = postgres(process.env.DATABASE_URL);
-const db = drizzle(client);
+const db = drizzle({ client });
 
 // Run once to create or update the audit_logs table
 await db.execute(createAuditTableSQL);
@@ -47,16 +54,20 @@ await db.execute(
 );
 ```
 
-Drizzle table helper (custom table name + extra columns):
+Drizzle table helper with a custom table name and extra columns:
 
 ```ts
-import { createAuditLogsTable } from "wr-audit-logger";
 import { varchar } from "drizzle-orm/pg-core";
+import { createAuditLogsTable } from "wr-audit-logger";
 
 export const auditLogs = createAuditLogsTable("my_audit_logs", {
-  companyId: varchar("company_id", { length: 255 }).notNull(),
+  companyId: varchar("company_id", { length: 255 }),
 });
 ```
+
+This helper defines the Drizzle table. Apply it with your migration tool. The
+built-in writer writes only the standard audit columns, so extra columns must
+be nullable or have a database default. Use customWriter to populate them.
 
 ### 2. Create an audit logger (wraps your db)
 
@@ -142,25 +153,28 @@ const auditContext = t.middleware(({ ctx, next }) => {
 
   return next();
 });
+
+const protectedProcedure = t.procedure.use(auditContext);
 ```
 
-### 4. Use the database normally — auditing is automatic!
+### 4. Use the database normally
 
 ```ts
 await auditedDb.insert(users).values({
   email: "alice@example.com",
   name: "Alice",
 });
-// ✓ Audit log created automatically
+// Audit log created automatically
 
 await auditedDb.update(users).set({ name: "Alice Smith" }).where(eq(users.id, 1));
-// ✓ Audit log created with before/after values
+// Audit log created with before/after values
 
 await auditedDb.delete(users).where(eq(users.id, 1));
-// ✓ Audit log created automatically
+// Audit log created automatically
 ```
 
-**No manual audit calls needed!** The audit logger automatically intercepts operations and creates audit logs.
+The wrapped database intercepts INSERT, UPDATE, and DELETE operations and
+creates audit logs for configured tables.
 
 ### Return values (auto-injected `.returning()`)
 
@@ -203,6 +217,9 @@ interface AuditConfig {
   // Fail the DB operation if audit logging fails (default: false)
   strictMode?: boolean;
 
+  // Customize error handling for audit write failures
+  logError?: (message: string, error: unknown) => void;
+
   // Resolve current user id
   getUserId?: () => string | undefined | Promise<string | undefined>;
 
@@ -216,6 +233,8 @@ interface AuditConfig {
   batch?: {
     // Max logs per batch (default: 100)
     batchSize?: number;
+    // Max queued logs (default: 10000)
+    maxQueueSize?: number;
     // Flush interval in ms (default: 1000)
     flushInterval?: number;
     // If true, wait for writes before returning (default: false)
@@ -280,22 +299,22 @@ const auditLogger = createAuditLogger(db, {
 });
 ```
 
-### 3) Custom table + extra columns
+### 3) Custom table with extra columns
 
 ```ts
 export const auditLogs = createAuditLogsTable("audit_logs", {
-  companyId: varchar("company_id", { length: 255 }).notNull(),
+  companyId: varchar("company_id", { length: 255 }),
 });
 
 const auditLogger = createAuditLogger(db, {
   tables: {
     users: { primaryKey: "id" },
   },
-  // built-in writer still writes only standard columns
+  // The built-in writer writes only standard columns.
 });
 ```
 
-If you need to write extra columns, use `customWriter` (next section).
+If `company_id` must be populated, use `customWriter` as shown below.
 
 ### 4) Custom storage (full control)
 
@@ -320,7 +339,7 @@ const auditLogger = createAuditLogger(db, {
 });
 ```
 
-### 5) Batch mode (async, high throughput)
+### 5) Batch mode (async)
 
 ```ts
 const auditLogger = createAuditLogger(db, {
@@ -331,7 +350,7 @@ const auditLogger = createAuditLogger(db, {
 });
 ```
 
-### 6) Manual logging (edge cases)
+### 6) Manual logging
 
 ```ts
 const auditLogger = createAuditLogger(db, {
@@ -339,6 +358,7 @@ const auditLogger = createAuditLogger(db, {
     users: { primaryKey: "id" },
   },
 });
+// The table must be listed in `tables` or the logger ignores the entry.
 await auditLogger.log({
   action: "READ",
   tableName: "users",
@@ -349,9 +369,32 @@ await auditLogger.log({
 
 ### 7) Type-safe schema usage
 
+Table names, columns and primary keys are checked against the tables your Drizzle
+instance knows about. Without them, any table name is accepted.
+
+drizzle-orm 1.x reads tables from `relations`:
+
+```ts
+import { defineRelations } from "drizzle-orm";
+
+const relations = defineRelations({ users, vehicles });
+const db = drizzle({ client, relations });
+
+const auditLogger = createAuditLogger(db, {
+  tables: {
+    users: { primaryKey: "id" },
+  },
+  fields: { users: ["id", "email"] },
+});
+```
+
+drizzle-orm 0.45 reads tables from `schema`:
+
 ```ts
 const schema = { users, vehicles };
-const auditLogger = createAuditLogger(db as PostgresJsDatabase<typeof schema>, {
+const db = drizzle({ client, schema });
+
+const auditLogger = createAuditLogger(db, {
   tables: {
     users: { primaryKey: "id" },
   },
@@ -367,7 +410,7 @@ Defaults (if omitted):
 - `updateValuesMode`: `"changed"` (UPDATE stores only changed fields)
 - `batch`: disabled (writes immediately)
 
-## Schema Contract (Default Writer)
+## Schema contract (default writer)
 
 If you use the built-in writer (no `customWriter`), your table must have these columns
 or map them via `auditColumnMap`:
@@ -420,14 +463,15 @@ await auditLogger.withContext(
 
 All operations inside the callback inherit this context.
 
-### Manual / custom actions
+### Manual and custom actions
 
-You can log custom actions (e.g., READ, EXPORT) manually:
+You can log custom actions such as READ or EXPORT manually. The table must be
+listed in `tables` or the logger ignores the entry.
 
 ```ts
 await auditLogger.log({
   action: "READ",
-  tableName: "sensitive_documents",
+  tableName: "users",
   recordId: docId,
   metadata: { reason: "user_request" },
 });
@@ -435,7 +479,9 @@ await auditLogger.log({
 
 ### Transactions
 
-All operations inside a transaction automatically share the same `transaction_id`.
+Operations inside a transaction share a generated `transaction_id`. Audit
+writes use the logger's database connection, not the transaction connection,
+so audit rows do not roll back with the transaction.
 
 ```ts
 await auditedDb.transaction(async (tx) => {
@@ -461,15 +507,15 @@ await auditedDb.transaction(async (tx) => {
     userId: user.id, // Using the returned data
   });
 
-  // All operations logged with same transaction_id ✓
+  // All operations share the same transaction_id.
 });
 ```
 
-## Querying Audit Logs
+## Querying audit logs
 
 ```ts
-import { auditLogs } from "wr-audit-logger";
 import { eq, desc } from "drizzle-orm";
+import { auditLogs } from "wr-audit-logger";
 
 // History for a specific record
 const history = await auditedDb
@@ -490,14 +536,10 @@ const activity = await auditedDb
 
 ## Roadmap
 
-- [x] Phase 1 — Manual audit logging
-- [x] Phase 2 — Automatic interception (current)
-- [x] Phase 3 — Async / batched writes
-- [ ] Phase 4 — ORM adapters
-
-## Contributing
-
-Contributions are welcome! Please open an issue or PR.
+- [x] Phase 1, manual audit logging
+- [x] Phase 2, automatic interception (current)
+- [x] Phase 3, async and batched writes
+- [ ] Phase 4, ORM adapters
 
 ## License
 

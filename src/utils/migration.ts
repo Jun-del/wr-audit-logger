@@ -1,7 +1,7 @@
-import type { AuditColumnMap } from "../types/config.js";
 // TODO: Replace all postgres-js imports with either generic db or driver-agnostic
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createAuditTableSQL, createAuditTableSQLFor } from "../storage/schema.js";
+import type { AuditColumnMap } from "../types/config.js";
 
 /**
  * Initialize the audit logging system

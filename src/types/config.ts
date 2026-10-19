@@ -6,8 +6,21 @@ type TableColumns<TTable> = TTable extends { _: { columns: infer C } }
     ? C
     : never
   : never;
-type TableSelect<TTable> = TTable extends { _: { inferSelect: infer S } } ? S : never;
+type TableSelect<TTable> = TTable extends { $inferSelect: infer S } ? S : never;
 type TableColumnName<TTable> = keyof TableColumns<TTable> & string;
+
+/**
+ * Table schema of a Drizzle database instance.
+ * drizzle-orm 1.x exposes tables through `_.relations[key].table`; 0.45 through `_.fullSchema`.
+ * Falls back to `Record<string, never>` (any table name) when the db carries no tables.
+ */
+export type DbSchema<TDb> = TDb extends { _: { relations: infer R } }
+  ? [keyof R] extends [never]
+    ? Record<string, never>
+    : { [K in keyof R]: R[K] extends { table: infer T } ? T : never }
+  : TDb extends { _: { fullSchema: infer S extends Record<string, unknown> } }
+    ? S
+    : Record<string, never>;
 
 type SchemaTable<TSchema, TName extends string> = {
   [K in keyof TSchema]: TSchema[K] extends Table

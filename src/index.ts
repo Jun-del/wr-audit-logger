@@ -1,11 +1,12 @@
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { AuditLogger } from "./core/AuditLogger.js";
 import type {
   AuditConfig,
   AuditContext,
   AuditTableName,
   AuditTableRecord,
+  DbSchema,
 } from "./types/config.js";
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { AuditLogger } from "./core/AuditLogger.js";
 
 // Re-export types
 export type {
@@ -14,6 +15,7 @@ export type {
   AuditColumnMap,
   AuditColumnKey,
   BatchWriterStats,
+  DbSchema,
 } from "./types/config.js";
 export type { AuditAction, AuditLog, AuditLogEntry, StoredAuditLog } from "./types/audit.js";
 export type { BatchAuditWriterStats } from "./storage/batch-writer.js";
@@ -64,18 +66,18 @@ export { initializeAuditLogging, checkAuditSetup, getAuditStats } from "./utils/
  * // ✓ Audit log created with before/after values
  * ```
  */
-export function createAuditLogger<TSchema extends Record<string, unknown>>(
-  db: PostgresJsDatabase<TSchema>,
-  config: AuditConfig<TSchema>,
+export function createAuditLogger<TDb extends PostgresJsDatabase<any>>(
+  db: TDb,
+  config: AuditConfig<DbSchema<TDb>>,
 ) {
-  const logger = new AuditLogger<TSchema>(db, config);
+  const logger = new AuditLogger<DbSchema<TDb>>(db, config);
 
   return {
     /**
      * The wrapped database instance with automatic audit logging
      * Use this instead of your original db instance
      */
-    db: logger.createAuditedDb(),
+    db: logger.createAuditedDb() as TDb,
 
     /**
      * Manually log an INSERT operation (for edge cases)
@@ -88,9 +90,11 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * await auditLogger.logInsert('users', { id: 1, email: 'user@example.com' });
      * ```
      */
-    logInsert: <TTable extends AuditTableName<TSchema>>(
+    logInsert: <TTable extends AuditTableName<DbSchema<TDb>>>(
       tableName: TTable,
-      insertedRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+      insertedRecords:
+        | AuditTableRecord<DbSchema<TDb>, TTable>
+        | AuditTableRecord<DbSchema<TDb>, TTable>[],
     ) => logger.logInsert(tableName, insertedRecords),
 
     /**
@@ -105,10 +109,14 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * await auditLogger.logUpdate('users', oldUser, newUser);
      * ```
      */
-    logUpdate: <TTable extends AuditTableName<TSchema>>(
+    logUpdate: <TTable extends AuditTableName<DbSchema<TDb>>>(
       tableName: TTable,
-      beforeRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
-      afterRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+      beforeRecords:
+        | AuditTableRecord<DbSchema<TDb>, TTable>
+        | AuditTableRecord<DbSchema<TDb>, TTable>[],
+      afterRecords:
+        | AuditTableRecord<DbSchema<TDb>, TTable>
+        | AuditTableRecord<DbSchema<TDb>, TTable>[],
     ) => logger.logUpdate(tableName, beforeRecords, afterRecords),
 
     /**
@@ -122,9 +130,11 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * await auditLogger.logDelete('users', deletedUser);
      * ```
      */
-    logDelete: <TTable extends AuditTableName<TSchema>>(
+    logDelete: <TTable extends AuditTableName<DbSchema<TDb>>>(
       tableName: TTable,
-      deletedRecords: AuditTableRecord<TSchema, TTable> | AuditTableRecord<TSchema, TTable>[],
+      deletedRecords:
+        | AuditTableRecord<DbSchema<TDb>, TTable>
+        | AuditTableRecord<DbSchema<TDb>, TTable>[],
     ) => logger.logDelete(tableName, deletedRecords),
 
     /**
@@ -189,11 +199,11 @@ export function createAuditLogger<TSchema extends Record<string, unknown>>(
      * });
      * ```
      */
-    log: <TTable extends AuditTableName<TSchema>>(entry: {
+    log: <TTable extends AuditTableName<DbSchema<TDb>>>(entry: {
       action: string;
       tableName: TTable;
       recordId: string;
-      values?: AuditTableRecord<TSchema, TTable>;
+      values?: AuditTableRecord<DbSchema<TDb>, TTable>;
       metadata?: Record<string, unknown>;
     }) => logger.log(entry),
 

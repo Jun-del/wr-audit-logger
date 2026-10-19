@@ -31,7 +31,7 @@ describeIntegration("Batch Mode Integration", () => {
 
     client = new Client(dbUrl);
     await client.connect();
-    originalDb = drizzle(client);
+    originalDb = drizzle({ client });
 
     // Create test table
     await originalDb.execute(`

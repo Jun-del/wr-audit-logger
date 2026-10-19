@@ -1,7 +1,7 @@
-import type { AuditLog, AuditLogEntry } from "../types/audit.js";
-import type { AuditColumnMap, AuditContext } from "../types/config.js";
 import { sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type { AuditLog, AuditLogEntry } from "../types/audit.js";
+import type { AuditColumnMap, AuditContext } from "../types/config.js";
 import { mergeMetadata } from "../utils/metadata.js";
 import { getAuditInsertColumns } from "./column-map.js";
 

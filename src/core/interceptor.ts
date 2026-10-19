@@ -1,6 +1,6 @@
-import type { AuditLogger } from "./AuditLogger.js";
 import { getTableName, isTable } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type { AuditLogger } from "./AuditLogger.js";
 
 // Enable debug logging via environment variable
 const DEBUG = process.env.AUDIT_DEBUG === "true";
@@ -122,10 +122,10 @@ function extractWhereClause(queryBuilder: QueryBuilderLike): unknown {
 /**
  * Create a proxied database instance that intercepts operations
  */
-export function createInterceptedDb<TSchema extends Record<string, unknown>>(
-  db: PostgresJsDatabase<TSchema>,
-  auditLogger: AuditLogger<TSchema>,
-): PostgresJsDatabase<TSchema> {
+export function createInterceptedDb<TDb extends PostgresJsDatabase<any>>(
+  db: TDb,
+  auditLogger: AuditLogger<any>,
+): TDb {
   return new Proxy(db, {
     get(target, prop) {
       const original = target[prop as keyof typeof target];
@@ -142,7 +142,7 @@ export function createInterceptedDb<TSchema extends Record<string, unknown>>(
 
       return original;
     },
-  }) as PostgresJsDatabase<TSchema>;
+  });
 }
 
 /**
