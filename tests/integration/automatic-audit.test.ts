@@ -43,7 +43,7 @@ describeIntegration("Automatic Audit Logging (Integration)", () => {
     // Connect to test database
     client = new Client(dbUrl);
     await client.connect();
-    originalDb = drizzle(client);
+    originalDb = drizzle({ client });
 
     // Create test tables with unique names (no IF NOT EXISTS needed)
     await originalDb.execute(`

@@ -53,7 +53,8 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "AUDIT_RUN_INTEGRATION_TESTS=true dotenvx run -- vitest run tests/integration",
     "typecheck": "tsc --noEmit",
-    "typecheck:types": "tsc -p tsconfig.typecheck.json --noEmit"
+    "typecheck:types": "tsc -p tsconfig.typecheck.json --noEmit",
+    "typecheck:types:v1": "tsc -p tsconfig.typecheck.v1.json --noEmit"
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3",
@@ -75,7 +76,7 @@
     "vitest": "^4.1.12"
   },
   "peerDependencies": {
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.2 || ^1.0.0-rc.4",
     "pg": "^8.17.2"
   },
   "peerDependenciesMeta": {

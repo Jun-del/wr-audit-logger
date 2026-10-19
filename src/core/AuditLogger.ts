@@ -61,7 +61,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * ```
    */
   constructor(
-    private db: PostgresJsDatabase<TSchema>,
+    private db: PostgresJsDatabase<any>,
     config: AuditConfig<TSchema>,
   ) {
     this.config = this.normalizeConfig(config);
@@ -217,7 +217,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * // Audit log created automatically
    * ```
    */
-  createAuditedDb(): PostgresJsDatabase<TSchema> {
+  createAuditedDb(): PostgresJsDatabase<any> {
     return createInterceptedDb(this.db, this);
   }
 

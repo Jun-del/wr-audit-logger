@@ -21,7 +21,7 @@ describeIntegration("Audit stats (Integration)", () => {
 
     client = new Client(dbUrl);
     await client.connect();
-    db = drizzle(client);
+    db = drizzle({ client });
   });
 
   afterAll(async () => {

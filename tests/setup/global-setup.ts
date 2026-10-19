@@ -19,7 +19,7 @@ export default async function globalSetup(): Promise<void> {
 
   const client = new Client(dbUrl);
   await client.connect();
-  const db = drizzle(client);
+  const db = drizzle({ client });
 
   await db.execute(createAuditTableSQL);
 

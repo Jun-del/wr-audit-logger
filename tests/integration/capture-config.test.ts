@@ -31,7 +31,7 @@ describeIntegration("Capture Configuration", () => {
 
     client = new Client(dbUrl);
     await client.connect();
-    originalDb = drizzle(client);
+    originalDb = drizzle({ client });
 
     // Create test table with unique name
     await originalDb.execute(`

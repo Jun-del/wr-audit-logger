@@ -4,7 +4,7 @@ Automatic audit logging for **Drizzle ORM and PostgreSQL**.
 Track who changed what and when without manual logging calls.
 
 > [!NOTE]
-> Most of this code was written by AI and reviewed by a human. Use with caution.
+> Most of this code was written and reviewed by AI. Use with caution.
 
 ## Installation
 
@@ -18,6 +18,8 @@ yarn add wr-audit-logger drizzle-orm postgres
 
 The Quick Start uses the postgres driver. For node-postgres, install pg and use drizzle-orm/node-postgres instead.
 
+Supports drizzle-orm `^0.45.2` and `^1.0.0-rc.4`.
+
 ## Quick start
 
 ### 1. Create the audit table
@@ -28,7 +30,7 @@ import postgres from "postgres";
 import { createAuditTableSQL } from "wr-audit-logger";
 
 const client = postgres(process.env.DATABASE_URL);
-const db = drizzle(client);
+const db = drizzle({ client });
 
 // Run once to create or update the audit_logs table
 await db.execute(createAuditTableSQL);
@@ -367,9 +369,32 @@ await auditLogger.log({
 
 ### 7) Type-safe schema usage
 
+Table names, columns and primary keys are checked against the tables your Drizzle
+instance knows about. Without them, any table name is accepted.
+
+drizzle-orm 1.x reads tables from `relations`:
+
+```ts
+import { defineRelations } from "drizzle-orm";
+
+const relations = defineRelations({ users, vehicles });
+const db = drizzle({ client, relations });
+
+const auditLogger = createAuditLogger(db, {
+  tables: {
+    users: { primaryKey: "id" },
+  },
+  fields: { users: ["id", "email"] },
+});
+```
+
+drizzle-orm 0.45 reads tables from `schema`:
+
 ```ts
 const schema = { users, vehicles };
-const auditLogger = createAuditLogger(db as PostgresJsDatabase<typeof schema>, {
+const db = drizzle({ client, schema });
+
+const auditLogger = createAuditLogger(db, {
   tables: {
     users: { primaryKey: "id" },
   },

@@ -246,14 +246,15 @@ and then call the manual logging method with the affected record.
 
 ### The wrapped database has a type error
 
-The wrapper keeps the Postgres Drizzle database type. Make sure the database
-and schema use the same driver type:
+The wrapper returns the same type as the database you pass in. If table names
+or columns are rejected, check that the database was created with your tables:
+`relations` on drizzle-orm 1.x, `schema` on 0.45.
 
 ```ts
-import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+const db = drizzle({ client, relations }); // 1.x
+const db = drizzle({ client, schema }); // 0.45
 
-const { db: auditedDb } = auditLogger;
-const typedDb: PostgresJsDatabase<typeof schema> = auditedDb;
+const { db: auditedDb } = createAuditLogger(db, config); // same type as db
 ```
 
 ## Production checks

@@ -49,3 +49,7 @@ auditLogger.logInsert("users", { id: 1 });
 
 // @ts-expect-error invalid field for logInsert
 auditLogger.logInsert("company_document", { nope: 1 });
+
+// No schema: any table name is accepted
+declare const untypedDb: PostgresJsDatabase;
+createAuditLogger(untypedDb, { tables: { users: { primaryKey: "id" } } });
