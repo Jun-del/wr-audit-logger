@@ -92,9 +92,10 @@ jobs:
     services:
       postgres:
         image: postgres:17
+        # Throwaway CI database: trust auth avoids a hardcoded password (flagged by secret scanners)
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: audit_test
         ports:
           - 5432:5432
@@ -105,7 +106,7 @@ jobs:
           --health-retries 10
     env:
       AUDIT_RUN_INTEGRATION_TESTS: "true"
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/audit_test
+      DATABASE_URL: postgres://postgres@localhost:5432/audit_test
     steps:
       - name: Check out repo
         uses: actions/checkout@v7
