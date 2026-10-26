@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  HUSKY: "0"
+
+jobs:
+  check:
+    name: Build, lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Check package (publint + attw)
+        run: pnpm run check:package
+
+      - name: Format
+        run: pnpm run format:check
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Typecheck types (drizzle-orm 0.45)
+        run: pnpm run typecheck:types
+
+      - name: Unit tests
+        run: pnpm run test:unit
+
+  typecheck-drizzle-v1:
+    name: Typecheck types (drizzle-orm 1.x)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The lockfile pins drizzle-orm 0.45; swap in the 1.x release candidate for this job only.
+      - name: Install drizzle-orm 1.x
+        run: pnpm add -D drizzle-orm@rc
+
+      - name: Typecheck types (drizzle-orm 1.x)
+        run: pnpm run typecheck:types:v1
+
+  integration:
+    name: Integration tests (Postgres 17)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: audit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d audit_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AUDIT_RUN_INTEGRATION_TESTS: "true"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/audit_test
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Invoke vitest directly: the test:integration script wraps it in `dotenvx run`, which expects a .env file.
+      - name: Integration tests
+        run: pnpm exec vitest run tests/integration
