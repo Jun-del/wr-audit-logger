@@ -106,6 +106,8 @@ export interface AuditConfig<TSchema extends Record<string, unknown> = Record<st
   /**
    * If true, operations fail if audit logging fails.
    * If false, errors are logged but operations proceed.
+   * In strict mode, a custom-writer failure after commit throws AuditDeliveryError;
+   * the committed business transaction must not be retried.
    * @default false
    */
   strictMode?: boolean;
@@ -128,7 +130,8 @@ export interface AuditConfig<TSchema extends Record<string, unknown> = Record<st
 
   /**
    * How UPDATE values are stored
-   * - "changed": store only changed fields (requires SELECT before UPDATE)
+   * - "changed": inside audited transactions, store changed fields using SELECT FOR UPDATE;
+   *   outside transactions or without a usable before-state, store the full after-row
    * - "full": store full row after UPDATE (no extra SELECT)
    * @default "changed"
    */
@@ -145,6 +148,8 @@ export interface AuditConfig<TSchema extends Record<string, unknown> = Record<st
    * Custom writer function for audit logs
    * Allows complete control over how audit logs are stored
    * If provided, the default audit_logs table is not used
+   * Inside audited transactions, runs after the outermost commit. In strict mode,
+   * a failure then throws AuditDeliveryError with committed: true; it cannot roll back data.
    *
    * @example
    * // Custom table with company_id

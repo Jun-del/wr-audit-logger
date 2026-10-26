@@ -9,23 +9,31 @@ distance, row size, indexes, and concurrent work all affect those numbers.
 The counts below describe immediate mode with one affected row. A bulk
 mutation still uses one audit insert for all returned rows.
 
-| Mutation                                |   Queries |
-| --------------------------------------- | --------: |
-| INSERT                                  |         2 |
-| UPDATE with updateValuesMode: "changed" | Usually 3 |
-| UPDATE with updateValuesMode: "full"    |         2 |
-| DELETE                                  |         2 |
+| Mutation                                   |   Queries |
+| ------------------------------------------ | --------: |
+| INSERT                                     |         2 |
+| UPDATE with "changed", outside transaction |         2 |
+| UPDATE with "changed", inside transaction  | Usually 3 |
+| UPDATE with updateValuesMode: "full"       |         2 |
+| DELETE                                     |         2 |
 
 INSERT and DELETE use the mutation with RETURNING, followed by one audit
 insert.
 
-With updateValuesMode: "changed", the logger first reads the matching rows,
-then runs the UPDATE with RETURNING, then writes the audit rows. If it cannot
-read a WHERE clause, it skips the before-state query and records the returned
-after rows instead.
+With updateValuesMode: "changed" inside an audited transaction, the logger
+reads matching rows using SELECT FOR UPDATE, runs UPDATE with RETURNING, and
+writes the audit rows. Outside audited transactions, it skips the before-state
+query and stores the full returned after-rows, avoiding a race between an
+unlocked snapshot and the UPDATE. It also uses full after-rows when there is
+no WHERE clause or the update uses FROM/joins.
 
 With updateValuesMode: "full", the logger stores the returned after rows and
 does not run the extra SELECT.
+
+Inside a transaction, non-strict mode wraps each audit insert in a savepoint
+(SAVEPOINT and RELEASE, two extra round trips) so a failed audit write can't
+abort the transaction. The before-state SELECT also takes row locks
+(FOR UPDATE) there.
 
 The wrapper adds RETURNING when the query does not have one. An explicit
 returning() call still works. For a selected return shape, the logger gets the
@@ -44,11 +52,19 @@ Defaults:
 - waitForWrite: false
 
 The standard writer sends queued logs in one database insert per flush. A
-custom writer receives the queued logs as one array per flush.
+custom writer receives the queued logs grouped by context: one call per
+distinct user, IP address, user agent, transaction ID, and metadata in the flush.
+
+With the built-in writer, transactions bypass the queue: audit rows are written
+on the transaction immediately so they commit or roll back with it. Custom
+writers receive logs after commit, using the queue when batching is enabled.
 
 With waitForWrite: false, the mutation returns after the logger queues the
 audit entry. A later flush writes it. Call flush() before a handoff or
-shutdown() during process termination so queued entries are written.
+shutdown() during process termination so queued entries are written. The
+flush timer doesn't keep the process alive, and the logger installs no
+SIGINT/SIGTERM handlers. It flushes on "beforeExit", which Node only emits when
+nothing else, such as an open connection pool, keeps the process running.
 
 With waitForWrite: true, each logging call waits for queued entries to flush.
 This gives the caller a stronger delivery guarantee, but it can reduce the
@@ -75,9 +91,10 @@ const auditLogger = createAuditLogger(db, {
 
 ## Choosing a configuration
 
-Use updateValuesMode: "changed" when the audit record must show which fields
-changed. It adds a before-state query when the logger can extract a WHERE
-clause.
+Use updateValuesMode: "changed" inside an audited transaction when the audit
+record must show which fields changed. It adds a locked before-state query
+when the logger can extract a WHERE clause. Outside transactions it records
+full after-rows, including for updates that set existing values.
 
 Use updateValuesMode: "full" when the after row is enough. It avoids that
 extra query but stores more data.

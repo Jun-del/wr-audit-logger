@@ -1,5 +1,7 @@
 import { bigserial, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import type { AuditColumnMap } from "../types/config.js";
+import { assertSafeIdentifier } from "../utils/identifier.js";
+import { DEFAULT_AUDIT_COLUMN_MAP } from "./column-map.js";
 
 /**
  * Audit logs table schema
@@ -7,30 +9,9 @@ import type { AuditColumnMap } from "../types/config.js";
  */
 const DEFAULT_TABLE_NAME = "audit_logs";
 
-const DEFAULT_COLUMN_MAP: AuditColumnMap = {
-  id: "id",
-  userId: "user_id",
-  ipAddress: "ip_address",
-  userAgent: "user_agent",
-  action: "action",
-  tableName: "table_name",
-  recordId: "record_id",
-  values: "values",
-  createdAt: "created_at",
-  metadata: "metadata",
-  transactionId: "transaction_id",
-  deletedAt: "deleted_at",
-};
-
-function assertSafeIdentifier(name: string): void {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-    throw new Error(`Invalid identifier: ${name}`);
-  }
-}
-
 function normalizeColumnMap(map?: Partial<AuditColumnMap>): AuditColumnMap {
   // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
-  const merged = { ...DEFAULT_COLUMN_MAP, ...(map || {}) };
+  const merged = { ...DEFAULT_AUDIT_COLUMN_MAP, ...(map || {}) };
   const seen = new Set<string>();
   for (const name of Object.values(merged)) {
     assertSafeIdentifier(name);
@@ -87,17 +68,19 @@ export const auditLogs = pgTable(
 function buildCreateAuditTableSQL(tableName: string, columnMap?: Partial<AuditColumnMap>): string {
   assertSafeIdentifier(tableName);
   const columns = normalizeColumnMap(columnMap);
-  const indexPrefix = `idx_${tableName}`;
-  const sequenceName = `${tableName}_${columns.id}_seq`;
+
+  const table = `"${tableName}"`;
+  const sequence = `"${tableName}_${columns.id}_seq"`;
+  const indexName = (suffix: string) => `"idx_${tableName}_${suffix}"`;
 
   return `
--- Prevent concurrent test runs from racing on schema creation
+-- Serialize concurrent initializations (e.g. several app instances starting at once)
 SELECT pg_advisory_xact_lock(913742, 540129);
 
-CREATE SEQUENCE IF NOT EXISTS ${sequenceName};
+CREATE SEQUENCE IF NOT EXISTS ${sequence};
 
-CREATE TABLE IF NOT EXISTS ${tableName} (
-  "${columns.id}" BIGINT PRIMARY KEY DEFAULT nextval('${sequenceName}'),
+CREATE TABLE IF NOT EXISTS ${table} (
+  "${columns.id}" BIGINT PRIMARY KEY DEFAULT nextval('${sequence}'),
   
   "${columns.userId}" VARCHAR(255),
   "${columns.ipAddress}" VARCHAR(45),
@@ -117,19 +100,53 @@ CREATE TABLE IF NOT EXISTS ${tableName} (
   "${columns.deletedAt}" TIMESTAMPTZ
 );
 
-ALTER SEQUENCE ${sequenceName} OWNED BY ${tableName}."${columns.id}";
+-- Only runs DDL when needed: it locks the table, and this may run on every app start.
+-- The constraint/column checks upgrade tables created by older versions.
+DO $audit_upgrade$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_depend
+    WHERE objid = '${sequence}'::regclass AND refobjid = '${table}'::regclass AND deptype = 'a'
+  ) THEN
+    ALTER SEQUENCE ${sequence} OWNED BY ${table}."${columns.id}";
+  END IF;
 
--- Ensure custom actions are allowed when table already exists
-ALTER TABLE ${tableName} DROP CONSTRAINT IF EXISTS ${tableName}_action_check;
-ALTER TABLE ${tableName} ALTER COLUMN "${columns.action}" TYPE VARCHAR(255);
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = '${table}'::regclass AND conname = '${tableName}_action_check'
+  ) THEN
+    ALTER TABLE ${table} DROP CONSTRAINT "${tableName}_action_check";
+  END IF;
 
-CREATE INDEX IF NOT EXISTS ${indexPrefix}_table_record ON ${tableName}("${columns.tableName}", "${columns.recordId}");
-CREATE INDEX IF NOT EXISTS ${indexPrefix}_user_id ON ${tableName}("${columns.userId}") WHERE "${columns.userId}" IS NOT NULL;
-CREATE INDEX IF NOT EXISTS ${indexPrefix}_created_at ON ${tableName}("${columns.createdAt}" DESC);
-CREATE INDEX IF NOT EXISTS ${indexPrefix}_action ON ${tableName}("${columns.action}");
-CREATE INDEX IF NOT EXISTS ${indexPrefix}_table_created ON ${tableName}("${columns.tableName}", "${columns.createdAt}" DESC);
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = '${table}'::regclass
+      AND attname = '${columns.action}'
+      AND format_type(atttypid, atttypmod) <> 'character varying(255)'
+  ) THEN
+    ALTER TABLE ${table} ALTER COLUMN "${columns.action}" TYPE VARCHAR(255);
+  END IF;
 
-COMMENT ON TABLE ${tableName} IS 'Audit trail for all database operations';
+  -- CREATE INDEX IF NOT EXISTS still locks the table before it checks the name
+  IF to_regclass('${indexName("table_record")}') IS NULL THEN
+    CREATE INDEX ${indexName("table_record")} ON ${table}("${columns.tableName}", "${columns.recordId}");
+  END IF;
+  IF to_regclass('${indexName("user_id")}') IS NULL THEN
+    CREATE INDEX ${indexName("user_id")} ON ${table}("${columns.userId}") WHERE "${columns.userId}" IS NOT NULL;
+  END IF;
+  IF to_regclass('${indexName("created_at")}') IS NULL THEN
+    CREATE INDEX ${indexName("created_at")} ON ${table}("${columns.createdAt}" DESC);
+  END IF;
+  IF to_regclass('${indexName("action")}') IS NULL THEN
+    CREATE INDEX ${indexName("action")} ON ${table}("${columns.action}");
+  END IF;
+  IF to_regclass('${indexName("table_created")}') IS NULL THEN
+    CREATE INDEX ${indexName("table_created")} ON ${table}("${columns.tableName}", "${columns.createdAt}" DESC);
+  END IF;
+END
+$audit_upgrade$;
+
+COMMENT ON TABLE ${table} IS 'Audit trail for all database operations';
 `;
 }
 

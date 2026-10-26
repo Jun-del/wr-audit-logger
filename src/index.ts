@@ -1,10 +1,11 @@
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { AuditLogger } from "./core/AuditLogger.js";
+export { AuditDeliveryError } from "./core/errors.js";
 import type {
   AuditConfig,
-  AuditContext,
   AuditTableName,
   AuditTableRecord,
+  BatchWriterStats,
   DbSchema,
 } from "./types/config.js";
 
@@ -18,8 +19,10 @@ export type {
   DbSchema,
 } from "./types/config.js";
 export type { AuditAction, AuditLog, AuditLogEntry, StoredAuditLog } from "./types/audit.js";
-export type { BatchAuditWriterStats } from "./storage/batch-writer.js";
-export type { BatchedCustomWriterStats } from "./storage/batched-custom-writer.js";
+/** @deprecated Use `BatchWriterStats` */
+export type BatchAuditWriterStats = BatchWriterStats;
+/** @deprecated Use `BatchWriterStats` */
+export type BatchedCustomWriterStats = BatchWriterStats;
 
 // Re-export schema and migration
 export {
@@ -251,8 +254,3 @@ export function createAuditLogger<TDb extends PostgresJsDatabase<any>>(
     getStats: logger.getStats.bind(logger),
   };
 }
-
-/**
- * Default export
- */
-export default createAuditLogger;
