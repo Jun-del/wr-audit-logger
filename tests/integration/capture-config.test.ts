@@ -83,7 +83,9 @@ describeIntegration("Capture Configuration", () => {
         .returning();
 
       // Update the user
-      await db.update(testUsers).set({ name: "Updated Name" }).where(eq(testUsers.id, user.id));
+      await db.transaction(async (tx: any) => {
+        await tx.update(testUsers).set({ name: "Updated Name" }).where(eq(testUsers.id, user.id));
+      });
 
       // Check audit log
       const logs = await originalDb
@@ -92,7 +94,7 @@ describeIntegration("Capture Configuration", () => {
         .where(and(eq(auditLogs.action, "UPDATE"), eq(auditLogs.tableName, TABLE_NAME)));
 
       expect(logs).toHaveLength(1);
-      expect(logs[0].values).toMatchObject({ name: "Updated Name" });
+      expect(logs[0].values).toEqual({ name: "Updated Name" });
     });
 
     it("should store full after values when in full mode", async () => {

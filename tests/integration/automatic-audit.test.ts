@@ -194,10 +194,10 @@ describeIntegration("Automatic Audit Logging (Integration)", () => {
         name: "Updated Name",
         email: "updated@example.com",
       });
-      // Note: values contains only changed fields by default
+      // Outside transactions, values contains the full filtered after-row.
     });
 
-    it('should not log update if nothing changed (when updateValuesMode="changed")', async () => {
+    it('should not log an unchanged update inside a transaction (updateValuesMode="changed")', async () => {
       // Create a new logger with updateValuesMode set to changed for this test
       const auditLogger = createAuditLogger(originalDb, {
         tables: { [USERS_TABLE]: { primaryKey: "id" } },
@@ -214,7 +214,9 @@ describeIntegration("Automatic Audit Logging (Integration)", () => {
       await originalDb.execute(`DELETE FROM audit_logs WHERE table_name = '${USERS_TABLE}'`);
 
       // Update with same values
-      await testDb.update(testUsers).set({ name: "Test" }).where(eq(testUsers.id, user.id));
+      await testDb.transaction(async (tx: any) => {
+        await tx.update(testUsers).set({ name: "Test" }).where(eq(testUsers.id, user.id));
+      });
 
       const logs = await originalDb
         .select()

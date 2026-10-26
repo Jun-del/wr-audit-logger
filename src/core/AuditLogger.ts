@@ -1,25 +1,53 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createDeleteAuditLogs } from "../capture/delete.js";
 import { createInsertAuditLogs } from "../capture/insert.js";
 import { createUpdateAuditLogs } from "../capture/update.js";
-import type { BatchAuditWriterStats } from "../storage/batch-writer.js";
-import { BatchAuditWriter } from "../storage/batch-writer.js";
-import type { BatchedCustomWriterStats } from "../storage/batched-custom-writer.js";
-import { BatchedCustomWriter } from "../storage/batched-custom-writer.js";
+import { BatchQueue } from "../storage/batch-queue.js";
 import { DEFAULT_AUDIT_COLUMN_MAP } from "../storage/column-map.js";
-import { AuditWriter } from "../storage/writer.js";
-import type { AuditLog } from "../types/audit.js";
+import { insertAuditLogs } from "../storage/writer.js";
+import type { AuditLog, AuditLogEntry } from "../types/audit.js";
 import type {
   AuditConfig,
   AuditContext,
   AuditColumnMap,
   AuditTableName,
   AuditTableRecord,
+  BatchWriterStats,
   NormalizedConfig,
 } from "../types/config.js";
+import { isSafeIdentifier } from "../utils/identifier.js";
 import { sanitizeError } from "../utils/logging.js";
+import { mergeMetadata } from "../utils/metadata.js";
+import { safeSerialize } from "../utils/serializer.js";
 import { AuditContextManager } from "./context.js";
+import { AuditDeliveryError } from "./errors.js";
 import { createInterceptedDb } from "./interceptor.js";
+
+type Db = PostgresJsDatabase<any>;
+
+export type MutationOperation = "insert" | "update" | "delete";
+
+/**
+ * An audit log with the context it was recorded in (user ID and metadata already resolved).
+ */
+interface ResolvedAuditLog {
+  log: AuditLog;
+  context: AuditContext;
+}
+
+/**
+ * A transaction opened through the audited db.
+ */
+interface TransactionScope {
+  /** The raw Drizzle transaction; set once Drizzle hands it to the callback */
+  tx: unknown;
+  transactionId: string;
+  parent: TransactionScope | undefined;
+  /** Logs for the custom writer, released once the outermost transaction commits */
+  afterCommit: ResolvedAuditLog[];
+}
 
 /**
  * Main audit logger class
@@ -40,10 +68,8 @@ import { createInterceptedDb } from "./interceptor.js";
 export class AuditLogger<TSchema extends Record<string, unknown> = any> {
   private config: NormalizedConfig<TSchema>;
   private contextManager = new AuditContextManager();
-  private writer: AuditWriter | null = null;
-  private batchWriter: BatchAuditWriter | null = null;
-  private batchedCustomWriter: BatchedCustomWriter | null = null;
-  private customWriter?: AuditConfig<TSchema>["customWriter"];
+  private transactions = new AsyncLocalStorage<TransactionScope>();
+  private queue: BatchQueue<ResolvedAuditLog> | null = null;
 
   /**
    * Creates a new AuditLogger instance
@@ -61,41 +87,19 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * ```
    */
   constructor(
-    private db: PostgresJsDatabase<any>,
+    private db: Db,
     config: AuditConfig<TSchema>,
   ) {
     this.config = this.normalizeConfig(config);
     this.validateConfig(this.config);
-    this.customWriter = config.customWriter as AuditConfig<TSchema>["customWriter"];
 
-    // Initialize appropriate writer
-    if (this.config.batch && config.customWriter) {
-      // Use batched custom writer
-      this.batchedCustomWriter = new BatchedCustomWriter(config.customWriter as any, {
+    if (this.config.batch) {
+      this.queue = new BatchQueue((logs) => this.writeNow(logs), {
         batchSize: this.config.batch.batchSize,
         maxQueueSize: this.config.batch.maxQueueSize,
         flushInterval: this.config.batch.flushInterval,
-        strictMode: this.config.strictMode,
-        waitForWrite: this.config.batch.waitForWrite,
         logError: this.config.logError,
       });
-    } else if (this.config.batch) {
-      // Use batch writer (standard)
-      this.batchWriter = new BatchAuditWriter(db, {
-        auditTable: this.config.auditTable,
-        auditColumnMap: this.config.auditColumnMap,
-        batchSize: this.config.batch.batchSize,
-        maxQueueSize: this.config.batch.maxQueueSize,
-        flushInterval: this.config.batch.flushInterval,
-        strictMode: this.config.strictMode,
-        getUserId: this.config.getUserId,
-        getMetadata: this.config.getMetadata,
-        waitForWrite: this.config.batch.waitForWrite,
-        logError: this.config.logError,
-      });
-    } else {
-      // Use immediate writer
-      this.writer = new AuditWriter(db, this.config);
     }
   }
 
@@ -160,7 +164,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
   private validateColumnMap(map: AuditColumnMap): void {
     const seen = new Set<string>();
     for (const name of Object.values(map)) {
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+      if (!isSafeIdentifier(name)) {
         throw new Error(`Invalid auditColumnMap identifier: ${name}`);
       }
       if (seen.has(name)) {
@@ -217,7 +221,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * // Audit log created automatically
    * ```
    */
-  createAuditedDb(): PostgresJsDatabase<any> {
+  createAuditedDb(): Db {
     return createInterceptedDb(this.db, this);
   }
 
@@ -253,6 +257,85 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
   }
 
   /**
+   * Record an INSERT/UPDATE/DELETE the interceptor just ran.
+   * `executor` is the db or transaction that ran it, so the audit write can join that transaction.
+   * @internal
+   */
+  recordMutation(
+    operation: MutationOperation,
+    tableName: string,
+    beforeRecords: Record<string, unknown>[],
+    records: Record<string, unknown>[],
+    executor: unknown,
+  ): Promise<void> {
+    return this.audit(() => {
+      switch (operation) {
+        case "insert":
+          return createInsertAuditLogs(tableName, records, this.config);
+        case "update":
+          return createUpdateAuditLogs(tableName, beforeRecords, records, this.config);
+        case "delete":
+          return createDeleteAuditLogs(tableName, records, this.config);
+      }
+    }, executor);
+  }
+
+  /**
+   * Run a Drizzle transaction so audit writes made inside it join it.
+   * `start` must call `bindTx` with the transaction object Drizzle passes to its callback.
+   * @internal
+   */
+  async runTransaction<T>(start: (bindTx: (tx: unknown) => void) => Promise<T>): Promise<T> {
+    const parent = this.transactions.getStore();
+    const scope: TransactionScope = {
+      tx: undefined,
+      // Savepoints belong to the outer transaction, so they share its ID
+      transactionId: parent?.transactionId ?? randomUUID(),
+      parent,
+      afterCommit: [],
+    };
+    const context = { ...this.contextManager.getContext(), transactionId: scope.transactionId };
+
+    const result = await this.contextManager.runWithContext(context, () =>
+      this.transactions.run(scope, () =>
+        start((tx) => {
+          scope.tx = tx;
+        }),
+      ),
+    );
+
+    // Committed (or, when nested, the savepoint was released)
+    if (scope.afterCommit.length > 0) {
+      if (parent) {
+        parent.afterCommit.push(...scope.afterCommit);
+      } else {
+        try {
+          await this.dispatch(scope.afterCommit);
+        } catch (error) {
+          this.handleError(new AuditDeliveryError(scope.transactionId, error));
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * True if `executor` is a transaction opened through the audited db.
+   * @internal
+   */
+  isTransaction(executor: unknown): boolean {
+    return this.findTransaction(executor) !== undefined;
+  }
+
+  /**
+   * @internal
+   */
+  logError(message: string, error: unknown): void {
+    this.config.logError(message, error);
+  }
+
+  /**
    * Manually log an INSERT operation
    *
    * @param tableName - Name of the table
@@ -270,9 +353,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
     if (!this.shouldAudit(tableName)) return;
 
     const records = Array.isArray(insertedRecords) ? insertedRecords : [insertedRecords];
-    const logs = createInsertAuditLogs(tableName, records, this.config);
-
-    await this.writeAuditLogs(logs);
+    await this.audit(() => createInsertAuditLogs(tableName, records, this.config));
   }
 
   /**
@@ -299,9 +380,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
 
     const before = Array.isArray(beforeRecords) ? beforeRecords : [beforeRecords];
     const after = Array.isArray(afterRecords) ? afterRecords : [afterRecords];
-    const logs = createUpdateAuditLogs(tableName, before, after, this.config);
-
-    await this.writeAuditLogs(logs);
+    await this.audit(() => createUpdateAuditLogs(tableName, before, after, this.config));
   }
 
   /**
@@ -322,58 +401,122 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
     if (!this.shouldAudit(tableName)) return;
 
     const records = Array.isArray(deletedRecords) ? deletedRecords : [deletedRecords];
-    const logs = createDeleteAuditLogs(tableName, records, this.config);
-
-    await this.writeAuditLogs(logs);
+    await this.audit(() => createDeleteAuditLogs(tableName, records, this.config));
   }
 
   /**
-   * Internal method to write audit logs (uses custom writer if provided)
-   * @private
+   * Build and write audit logs. Any failure, including building the logs, follows `strictMode`:
+   * thrown in strict mode, otherwise passed to `logError` so the caller's operation still succeeds.
    */
-  private async writeAuditLogs(logs: any[]): Promise<void> {
-    if (logs.length === 0) return;
-
-    const context = this.contextManager.getContext();
-
+  private async audit(build: () => AuditLog[], executor?: unknown): Promise<void> {
     try {
-      if (this.batchedCustomWriter) {
-        // Use batched custom writer
-        const writePromise = this.batchedCustomWriter.queueAuditLogs(logs, context);
+      const logs = build();
+      if (logs.length === 0) return;
 
-        // Wait for write if configured
-        if (this.config.batch?.waitForWrite || this.config.strictMode) {
-          await writePromise;
-        } else {
-          writePromise.catch((error) => {
-            this.config.logError("[AUDIT] Failed to write audit logs:", error);
-          });
-        }
-      } else if (this.customWriter) {
-        // Use custom writer (immediate - no batching)
-        await this.customWriter(logs, context);
-      } else if (this.batchWriter) {
-        // Use batch writer (standard)
-        const writePromise = this.batchWriter.queueAuditLogs(logs, context);
-
-        // Wait for write if configured
-        if (this.config.batch?.waitForWrite || this.config.strictMode) {
-          await writePromise;
-        } else {
-          writePromise.catch((error) => {
-            this.config.logError("[AUDIT] Failed to write audit logs:", error);
-          });
-        }
-      } else if (this.writer) {
-        // Use immediate writer (standard)
-        await this.writer.writeAuditLogs(logs, context);
+      const resolved = await this.resolveLogs(logs);
+      const scope = this.findTransaction(executor);
+      if (scope) {
+        await this.writeInTransaction(resolved, scope);
+      } else {
+        await this.dispatch(resolved);
       }
     } catch (error) {
-      if (this.config.strictMode) {
-        throw error;
-      }
-      this.config.logError("[AUDIT] Failed to write audit logs:", error);
+      this.handleError(error);
     }
+  }
+
+  private handleError(error: unknown): void {
+    if (this.config.strictMode) {
+      throw error;
+    }
+    this.config.logError("[AUDIT] Failed to write audit logs:", error);
+  }
+
+  /**
+   * Attach the current context: an explicit `userId` from `setContext`/`withContext` wins over
+   * `getUserId()`, and metadata merges `getMetadata()`, context metadata, then per-log metadata.
+   */
+  private async resolveLogs(logs: AuditLog[]): Promise<ResolvedAuditLog[]> {
+    const current = this.contextManager.getContext();
+    const userId = current?.userId || (await this.config.getUserId()) || undefined;
+    const metadata = mergeMetadata(await this.config.getMetadata(), current?.metadata) ?? undefined;
+    const context: AuditContext = { ...current, userId, metadata };
+
+    return logs.map((log) => ({
+      log: { ...log, metadata: mergeMetadata(metadata, log.metadata) ?? undefined },
+      context,
+    }));
+  }
+
+  private findTransaction(executor?: unknown): TransactionScope | undefined {
+    let scope = this.transactions.getStore();
+    if (executor === undefined) return scope;
+    // A statement run on the root db inside a transaction callback is not part of it
+    while (scope && scope.tx !== executor) {
+      scope = scope.parent;
+    }
+    return scope;
+  }
+
+  private async writeInTransaction(
+    logs: ResolvedAuditLog[],
+    scope: TransactionScope,
+  ): Promise<void> {
+    if (this.config.customWriter) {
+      // A custom writer can't join the transaction; hold its logs until the transaction commits
+      scope.afterCommit.push(...logs);
+      return;
+    }
+
+    const tx = scope.tx as Db;
+    if (this.config.strictMode) {
+      await this.writeNow(logs, tx);
+      return;
+    }
+    // A failed statement aborts the whole Postgres transaction, so isolate the write in a savepoint
+    await tx.transaction((savepoint) => this.writeNow(logs, savepoint as unknown as Db));
+  }
+
+  /**
+   * Write outside of a transaction: through the batch queue if enabled, otherwise immediately.
+   */
+  private async dispatch(logs: ResolvedAuditLog[]): Promise<void> {
+    if (!this.queue) {
+      await this.writeNow(logs);
+      return;
+    }
+
+    const waitForWrite = this.config.batch?.waitForWrite || this.config.strictMode;
+    const written = this.queue.enqueue(logs, waitForWrite);
+    if (waitForWrite) {
+      await written;
+    } else {
+      written.catch((error) => {
+        this.config.logError("[AUDIT] Failed to write audit logs:", error);
+      });
+    }
+  }
+
+  /**
+   * Hand logs to the custom writer, or insert them into the audit table.
+   */
+  private async writeNow(logs: ResolvedAuditLog[], db: Db = this.db): Promise<void> {
+    const { customWriter } = this.config;
+    if (customWriter) {
+      for (const group of groupByContext(logs)) {
+        await customWriter(group.logs, group.context);
+      }
+      return;
+    }
+
+    const entries: AuditLogEntry[] = logs.map(({ log, context }) => ({
+      ...log,
+      userId: context.userId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      transactionId: context.transactionId,
+    }));
+    await insertAuditLogs(db, this.config.auditTable, this.config.auditColumnMap, entries);
   }
 
   /**
@@ -469,15 +612,15 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
   }): Promise<void> {
     if (!this.shouldAudit(entry.tableName)) return;
 
-    const log: AuditLog = {
-      action: entry.action,
-      tableName: entry.tableName,
-      recordId: entry.recordId,
-      values: entry.values,
-      metadata: entry.metadata,
-    };
-
-    await this.writeAuditLogs([log]);
+    await this.audit(() => [
+      {
+        action: entry.action,
+        tableName: entry.tableName,
+        recordId: entry.recordId,
+        values: entry.values,
+        metadata: entry.metadata,
+      },
+    ]);
   }
 
   /**
@@ -497,12 +640,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * ```
    */
   async flush(): Promise<void> {
-    if (this.batchWriter) {
-      await this.batchWriter.flush();
-    }
-    if (this.batchedCustomWriter) {
-      await this.batchedCustomWriter.flush();
-    }
+    await this.queue?.flush();
   }
 
   /**
@@ -521,12 +659,7 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * ```
    */
   async shutdown(): Promise<void> {
-    if (this.batchWriter) {
-      await this.batchWriter.shutdown();
-    }
-    if (this.batchedCustomWriter) {
-      await this.batchedCustomWriter.shutdown();
-    }
+    await this.queue?.shutdown();
   }
 
   /**
@@ -543,13 +676,43 @@ export class AuditLogger<TSchema extends Record<string, unknown> = any> {
    * }
    * ```
    */
-  getStats(): BatchAuditWriterStats | BatchedCustomWriterStats | undefined {
-    if (this.batchWriter) {
-      return this.batchWriter.getStats();
+  getStats(): BatchWriterStats | undefined {
+    return this.queue?.getStats();
+  }
+}
+
+/**
+ * Group logs that share a context so each custom writer call gets one accurate context.
+ */
+function groupByContext(
+  logs: ResolvedAuditLog[],
+): Array<{ context: AuditContext; logs: AuditLog[] }> {
+  const groups = new Map<string, { context: AuditContext; logs: AuditLog[] }>();
+  for (const { log, context } of logs) {
+    const key = contextKey(context);
+    const group = groups.get(key);
+    if (group) {
+      group.logs.push(log);
+    } else {
+      groups.set(key, { context, logs: [log] });
     }
-    if (this.batchedCustomWriter) {
-      return this.batchedCustomWriter.getStats();
-    }
-    return undefined;
+  }
+  return [...groups.values()];
+}
+
+function contextKey(context: AuditContext): string {
+  try {
+    return JSON.stringify(
+      safeSerialize([
+        context.userId,
+        context.ipAddress,
+        context.userAgent,
+        context.transactionId,
+        context.metadata,
+      ]),
+    );
+  } catch {
+    // Unserializable metadata: keep the log in a group of its own
+    return randomUUID();
   }
 }

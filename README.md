@@ -173,14 +173,24 @@ await auditedDb.delete(users).where(eq(users.id, 1));
 // Audit log created automatically
 ```
 
-The wrapped database intercepts INSERT, UPDATE, and DELETE operations and
-creates audit logs for configured tables.
+The wrapped database intercepts INSERT, UPDATE, and DELETE query builders and
+creates audit logs for configured tables. That covers `await`, `.then()`,
+`.execute()`, and prepared statements (`.prepare()`).
+
+Not audited: raw SQL (`db.execute(...)`), queries on the original unwrapped
+`db`, and statements built from `db.with(...)`. Upserts
+(`onConflictDoUpdate`) are logged as INSERT.
 
 ### Return values (auto-injected `.returning()`)
 
 For audit capture, `.returning()` is auto-injected for INSERT/UPDATE/DELETE when you don't call it.
-This means the result may be the returned rows even if you didn't explicitly request them.
-If your code relies on non-returning metadata, avoid depending on that behavior while auditing is enabled.
+The result is then the affected rows instead of the driver's usual result object. The
+row count is kept on the array as `rowCount` (node-postgres) and `count` (postgres-js),
+so `if (result.rowCount === 0)` still works. Other driver metadata, such as
+node-postgres `command` or `fields`, is not available while auditing is enabled.
+
+A partial selection such as `.returning({ userId: users.id })` returns exactly what you
+selected; the logger requests the full row for the audit log separately in the same query.
 
 ## Configuration
 
@@ -192,7 +202,8 @@ interface AuditConfig {
   // Specific fields per table (optional)
   fields?: Record<string, string[]>;
 
-  // Fields to exclude globally
+  // Fields to exclude globally. Their values are never stored. When a locked
+  // before-state is available, changes use "[REDACTED]"; full after-rows omit them.
   excludeFields?: string[];
 
   // Audit table name (default: audit_logs)
@@ -214,19 +225,22 @@ interface AuditConfig {
     deletedAt?: string;
   };
 
-  // Fail the DB operation if audit logging fails (default: false)
+  // Propagate audit failures (default: false). Custom writers can fail after commit;
+  // see AuditDeliveryError under Transactions.
   strictMode?: boolean;
 
   // Customize error handling for audit write failures
   logError?: (message: string, error: unknown) => void;
 
-  // Resolve current user id
+  // Resolve current user id. Used when the context (setContext/withContext)
+  // has no userId; an explicit context userId wins.
   getUserId?: () => string | undefined | Promise<string | undefined>;
 
   // Resolve additional metadata
   getMetadata?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
 
-  // How UPDATE values are stored ("changed" or "full")
+  // "changed": locked diffs inside audited transactions; full after-rows outside.
+  // "full": always store the full after-row, with excluded fields removed.
   updateValuesMode?: "changed" | "full";
 
   // Batch configuration for async writes (disabled by default)
@@ -240,8 +254,14 @@ interface AuditConfig {
     // If true, wait for writes before returning (default: false)
     waitForWrite?: boolean;
   };
+  // Batch mode never keeps the process alive and installs no signal handlers.
+  // Queued logs are flushed on "beforeExit"; call shutdown() from your own
+  // SIGTERM handler so they are also written when the process is stopped.
 
-  // Custom writer to store audit logs in your own table
+  // Custom writer to store audit logs in your own table.
+  // `context.userId` falls back to getUserId(); `context.metadata` and each
+  // `log.metadata` include getMetadata(). Inside a transaction it is called
+  // after the transaction commits (and not at all if it rolls back).
   customWriter?: (
     logs: Array<{
       action: string;
@@ -348,7 +368,17 @@ const auditLogger = createAuditLogger(db, {
   },
   batch: { batchSize: 200, flushInterval: 1000 },
 });
+
+process.on("SIGTERM", async () => {
+  await auditLogger.shutdown(); // writes anything still queued
+  process.exit(0);
+});
 ```
+
+Batch mode writes after the mutation returns, so an audit row can be lost if the
+process dies first, or if a batch fails to write (failed batches are reported
+through `logError`, not retried). For atomic data/audit writes, use the built-in
+writer inside an audited transaction with `strictMode: true`.
 
 ### 6) Manual logging
 
@@ -407,7 +437,8 @@ Defaults (if omitted):
 - `excludeFields`: `["password", "token", "secret", "apiKey"]`
 - `auditTable`: `"audit_logs"`
 - `strictMode`: `false`
-- `updateValuesMode`: `"changed"` (UPDATE stores only changed fields)
+- `updateValuesMode`: `"changed"` (locked diffs inside audited transactions;
+  full after-rows outside transactions)
 - `batch`: disabled (writes immediately)
 
 ## Schema contract (default writer)
@@ -463,6 +494,12 @@ await auditLogger.withContext(
 
 All operations inside the callback inherit this context.
 
+Drizzle builders are lazy: start execution inside the callback. Returning a builder
+from a synchronous callback, such as `withContext(ctx, () => auditedDb.insert(users).values(data))`,
+lets an outer `await` start it after the scope has returned. Use an async callback
+with an inner `await` as above, an async callback returning the builder, or call
+`.execute()` inside the callback.
+
 ### Manual and custom actions
 
 You can log custom actions such as READ or EXPORT manually. The table must be
@@ -479,9 +516,61 @@ await auditLogger.log({
 
 ### Transactions
 
-Operations inside a transaction share a generated `transaction_id`. Audit
-writes use the logger's database connection, not the transaction connection,
-so audit rows do not roll back with the transaction.
+Operations inside a transaction share a generated `transaction_id`. With the
+built-in writer, audit rows use the transaction's own connection: they commit and
+roll back together with your changes. Nested transactions (savepoints) share
+the outer `transaction_id`.
+
+- Non-strict mode wraps each audit write in a savepoint, so a failed audit
+  write is reported through `logError` without aborting your transaction.
+- In strict mode a failed built-in audit write fails the statement, and with it
+  the transaction.
+- A `customWriter` can't join the transaction, so it is called after commit
+  and skipped on rollback.
+- With the built-in writer, batch mode doesn't apply inside a transaction: audit rows are written
+  immediately on the transaction, so they stay atomic with the change.
+- With `updateValuesMode: "changed"`, the before-state SELECT uses
+  `FOR UPDATE`. Outside audited transactions, the logger stores the full returned
+  after-row instead of taking an unlocked snapshot. It also falls back to the
+  after-row for updates without a WHERE clause or with UPDATE FROM/joins.
+
+For automatic updates, field diffs require an audited transaction. Without one,
+even an update that sets an existing value is logged as an UPDATE with its full
+after-row. Field allow-lists and exclusions still apply in both modes.
+
+If a custom writer fails after commit, strict mode throws the exported
+`AuditDeliveryError`, with `code: "AUDIT_DELIVERY_FAILED_AFTER_COMMIT"`,
+`committed: true`, `transactionId`, and the original error in `cause`.
+The database changes are already committed: **do not retry the business transaction**.
+Non-strict mode reports this error through `logError` and returns the transaction
+result. A custom writer may have partially delivered logs before failing; recovery
+needs an idempotent writer. With asynchronous batching, later failures are reported
+through `logError` rather than rejecting the completed transaction.
+
+```ts
+import { AuditDeliveryError } from "wr-audit-logger";
+
+try {
+  await auditedDb.transaction(async (tx) => {
+    await tx.insert(users).values(data);
+  });
+} catch (error) {
+  if (error instanceof AuditDeliveryError) {
+    // Data committed. Report/reconcile audit delivery separately; do not rerun the insert.
+    reportAuditDeliveryFailure(error.transactionId, error.cause);
+  } else {
+    throw error;
+  }
+}
+```
+
+For durable external delivery, write an outbox entry in the same business
+transaction and deliver it with an idempotent worker. A custom writer alone
+cannot make a database commit and an external write atomic. Outside a transaction,
+an audit failure also cannot undo an already-committed mutation.
+
+Use the `tx` passed to the callback. Statements run on the root `db` inside the
+callback are not part of the transaction, and neither are their audit rows.
 
 ```ts
 await auditedDb.transaction(async (tx) => {

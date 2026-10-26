@@ -19,17 +19,6 @@ export function extractPrimaryKey(
   return configured;
 }
 
-/**
- * Extract primary key from multiple records
- */
-export function extractPrimaryKeys(
-  records: Record<string, unknown>[],
-  tableName: string,
-  tableConfigMap: Record<string, { primaryKey: string | string[] }>,
-): string[] {
-  return records.map((record) => extractPrimaryKey(record, tableName, tableConfigMap));
-}
-
 function extractConfiguredPrimaryKey(
   record: Record<string, unknown>,
   key: string | string[],

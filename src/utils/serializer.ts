@@ -20,13 +20,9 @@ export function filterFields(
   }
 
   // If specific fields are configured for this table, keep only those
-  const fields = config.fields as Record<string, string[] | undefined>;
-  if (fields[tableName]) {
-    const allowedFields = fields[tableName];
-    for (const key of Object.keys(filtered)) {
-      if (!allowedFields.includes(key)) {
-        delete filtered[key];
-      }
+  for (const key of Object.keys(filtered)) {
+    if (!isFieldTracked(key, tableName, config)) {
+      delete filtered[key];
     }
   }
 
@@ -34,24 +30,15 @@ export function filterFields(
 }
 
 /**
- * Get list of fields that changed between two records
+ * False if the table has a `fields` allow-list that doesn't include `field`
  */
-export function getChangedFields(
-  before: Record<string, unknown> | undefined,
-  after: Record<string, unknown> | undefined,
-): string[] {
-  if (!before || !after) return [];
-
-  const changed: string[] = [];
-  const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
-
-  for (const key of allKeys) {
-    if (!isDeepStrictEqual(before[key], after[key])) {
-      changed.push(key);
-    }
-  }
-
-  return changed;
+export function isFieldTracked(
+  field: string,
+  tableName: string,
+  config: NormalizedConfig,
+): boolean {
+  const allowedFields = (config.fields as Record<string, string[] | undefined>)[tableName];
+  return !allowedFields || allowedFields.includes(field);
 }
 
 /**

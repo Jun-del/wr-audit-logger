@@ -1,6 +1,6 @@
-import { getTableName, isTable } from "drizzle-orm";
+import { getTableColumns, getTableName, isTable } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import type { AuditLogger } from "./AuditLogger.js";
+import type { AuditLogger, MutationOperation } from "./AuditLogger.js";
 
 // Enable debug logging via environment variable
 const DEBUG = process.env.AUDIT_DEBUG === "true";
@@ -10,134 +10,67 @@ function debug(...args: unknown[]) {
   }
 }
 
-type QueryBuilderLike = Record<string, unknown> & {
-  table?: unknown;
-  config?: {
-    table?: unknown;
-    where?: unknown;
-  };
-  _?: {
-    table?: unknown;
-    where?: unknown;
-    name?: string;
-    config?: { name?: string };
-  };
-  name?: string;
-  toSQL?: () => { sql?: string };
-  returning?: (...args: unknown[]) => QueryBuilderLike;
-  then?: (...args: unknown[]) => unknown;
-  catch?: (...args: unknown[]) => unknown;
-  finally?: (...args: unknown[]) => unknown;
-};
+type Db = PostgresJsDatabase<any>;
+type Row = Record<string, unknown>;
+type Builder = Record<PropertyKey, any>;
+type PlaceholderValues = Record<string, unknown> | undefined;
 
-type QueryMethod = (...args: unknown[]) => QueryBuilderLike;
+/** Prefix for the extra columns requested next to a partial `.returning({...})` selection */
+const AUDIT_KEY_PREFIX = "__audit__";
 
-/**
- * Extract table name from Drizzle query builder
- */
-function resolveTableName(table: unknown): string | null {
-  if (!table || (typeof table !== "object" && typeof table !== "function")) {
-    return null;
-  }
-
-  if (isTable(table)) {
-    return getTableName(table);
-  }
-
-  const metaName =
-    (table as QueryBuilderLike)?._?.name ??
-    (table as QueryBuilderLike)?._?.config?.name ??
-    (table as QueryBuilderLike)?.name;
-  if (typeof metaName === "string" && metaName.length > 0) {
-    return metaName;
-  }
-
-  return null;
-}
-
-function extractTableName(queryBuilder: QueryBuilderLike, tableRef?: unknown): string | null {
-  try {
-    const directRef = resolveTableName(tableRef);
-    if (directRef) {
-      return directRef;
-    }
-
-    // Try to get table from different query builder types
-    const directTable = resolveTableName(queryBuilder.table);
-    if (directTable) {
-      return directTable;
-    }
-
-    const configTable = resolveTableName(queryBuilder.config?.table);
-    if (configTable) {
-      return configTable;
-    }
-
-    // For insert/update/delete builders
-    const internalTable = resolveTableName(queryBuilder._?.table);
-    if (internalTable) {
-      return internalTable;
-    }
-
-    // Try to extract from SQL query (last resort)
-    const sqlQuery = queryBuilder.toSQL?.();
-    if (sqlQuery?.sql) {
-      const match = sqlQuery.sql.match(/(?:from|into|update)\s+(?:"?(\w+)"?\.)?"?(\w+)"?/i);
-      if (match) {
-        const tableName = match[2] ?? match[1] ?? null;
-        if (tableName) {
-          debug("Extracted table name from SQL:", tableName);
-        }
-        return tableName;
-      }
-      debug("Failed SQL table extraction", sqlQuery.sql.slice(0, 160));
-    }
-  } catch (error) {
-    debug("Table name extraction error", error);
-  }
-
-  return null;
+interface BuilderState {
+  operation: MutationOperation;
+  table: unknown;
+  /** The db or transaction the statement runs on */
+  db: Db;
+  auditLogger: AuditLogger<any>;
+  /**
+   * What the caller passed to `.returning()`:
+   * `undefined` if it was never called, `null` for `.returning()` with no selection.
+   */
+  selection: Record<string, unknown> | null | undefined;
 }
 
 /**
- * Extract WHERE clause conditions to query "before" state
+ * How to run a statement so the audit gets full rows while the caller gets what they asked for.
  */
-function extractWhereClause(queryBuilder: QueryBuilderLike): unknown {
-  try {
-    // Get the WHERE condition from query builder
-    if (queryBuilder.config?.where) {
-      return queryBuilder.config.where;
-    }
-
-    if (queryBuilder._ && queryBuilder._.where) {
-      return queryBuilder._.where;
-    }
-  } catch {
-    // Ignore extraction errors
-  }
-
-  return null;
+interface ReturningPlan {
+  split(result: unknown): { returned: unknown; auditRows: Row[] };
+  /** Put back the caller's own `.returning()` selection on the builder */
+  restore(): void;
 }
 
 /**
  * Create a proxied database instance that intercepts operations
  */
-export function createInterceptedDb<TDb extends PostgresJsDatabase<any>>(
-  db: TDb,
-  auditLogger: AuditLogger<any>,
-): TDb {
+export function createInterceptedDb<TDb extends Db>(db: TDb, auditLogger: AuditLogger<any>): TDb {
   return new Proxy(db, {
     get(target, prop) {
-      const original = target[prop as keyof typeof target];
-
-      // Intercept insert/update/delete methods
-      if (prop === "insert" || prop === "update" || prop === "delete") {
-        return createQueryBuilderProxy(prop, original as QueryMethod, target, auditLogger);
+      const original = (target as Builder)[prop];
+      if (typeof original !== "function") {
+        return original;
       }
 
-      // Intercept transaction method to maintain context
+      if (prop === "insert" || prop === "update" || prop === "delete") {
+        return (table: unknown, ...rest: unknown[]) =>
+          wrapBuilder(
+            { operation: prop, table, db: target, auditLogger, selection: undefined },
+            original.call(target, table, ...rest),
+          );
+      }
+
       if (prop === "transaction") {
-        return createTransactionProxy(original as unknown, target, auditLogger);
+        return (callback: (tx: Db) => unknown, ...rest: unknown[]) =>
+          auditLogger.runTransaction((bindTx) =>
+            original.call(
+              target,
+              (tx: Db) => {
+                bindTx(tx);
+                return callback(createInterceptedDb(tx, auditLogger));
+              },
+              ...rest,
+            ),
+          );
       }
 
       return original;
@@ -146,192 +79,42 @@ export function createInterceptedDb<TDb extends PostgresJsDatabase<any>>(
 }
 
 /**
- * Create a proxy for insert/update/delete query builders
+ * Wrap an insert/update/delete builder so that running it (await, .then, .execute(),
+ * or a prepared statement) also writes the audit log.
  */
-function createQueryBuilderProxy(
-  operation: string,
-  originalMethod: QueryMethod,
-  db: PostgresJsDatabase<any>,
-  auditLogger: AuditLogger,
-) {
-  return function (...args: unknown[]) {
-    // Call original method to get the query builder
-    const queryBuilder = originalMethod.apply(db, args);
-    const tableRef = args[0];
-
-    // Wrap the query builder to intercept execution
-    return createExecutionProxy(operation, queryBuilder, db, auditLogger, tableRef);
-  };
-}
-
-/**
- * Create a proxy that intercepts the execution of queries
- */
-function createExecutionProxy(
-  operation: string,
-  queryBuilder: QueryBuilderLike,
-  db: PostgresJsDatabase<any>,
-  auditLogger: AuditLogger,
-  tableRef?: unknown,
-) {
-  let hasIntercepted = false; // Prevent double interception
-  let hasReturning = false; // Track if user called .returning()
-  let shouldAugmentReturning = false;
-  let projectUserResult: ((result: unknown) => unknown) | null = null;
-  let fullReturningBuilder: QueryBuilderLike | null = null;
-
-  const proxy = new Proxy(queryBuilder, {
+function wrapBuilder(state: BuilderState, builder: Builder): Builder {
+  const proxy: Builder = new Proxy(builder, {
     get(target, prop) {
-      const original = (target as Record<string, unknown>)[prop as string];
-
-      if (prop === "returning" && typeof original === "function") {
-        return function (...args: unknown[]) {
-          hasReturning = true;
-          if (args.length === 1 && isSelectionObject(args[0])) {
-            const keys = Object.keys(args[0]);
-            shouldAugmentReturning = keys.length > 0;
-            projectUserResult = (result) => projectReturningResult(result, keys);
-            if (shouldAugmentReturning) {
-              // Build a full-returning variant for audit only.
-              fullReturningBuilder = (original as Function).apply(target, []);
-              // Keep original builder unmodified; we'll project results to user selection.
-              return proxy;
-            }
-          } else {
-            shouldAugmentReturning = false;
-            projectUserResult = null;
-            fullReturningBuilder = null;
-          }
-
-          const result = (original as Function).apply(target, args);
-
-          if (result && typeof result === "object" && result !== target) {
-            return createExecutionProxy(
-              operation,
-              result as QueryBuilderLike,
-              db,
-              auditLogger,
-              tableRef,
-            );
-          }
-
-          if (result === target) {
-            return proxy;
-          }
-
-          return result;
-        };
+      const original = target[prop];
+      if (typeof original !== "function") {
+        return original;
       }
 
-      // Intercept promise methods (then, catch, finally) which trigger execution
-      if (prop === "then" || prop === "catch" || prop === "finally") {
-        return function (...args: unknown[]) {
-          // If we've already intercepted, just pass through
-          if (hasIntercepted) {
-            debug(`Already intercepted for ${operation}, passing through ${String(prop)}`);
-            return (original as Function | undefined)?.apply(target, args);
-          }
-
-          hasIntercepted = true;
-          const tableName = extractTableName(target, tableRef);
-          debug(`Intercepting ${operation} on ${tableName} via ${String(prop)}`);
-
-          // If we can't extract table name or shouldn't audit, just execute normally
-          if (!tableName || !auditLogger.shouldAudit(tableName)) {
-            debug(
-              `Skipping audit for ${tableName} (shouldAudit: ${tableName ? auditLogger.shouldAudit(tableName) : "no table"})`,
-            );
-            return (original as Function | undefined)?.apply(target, args);
-          }
-
-          // For INSERT/UPDATE/DELETE, automatically add .returning() if not present
-          let queryToExecute = target;
-          if (operation === "insert" || operation === "update" || operation === "delete") {
-            if (!hasReturning) {
-              debug(`Auto-injecting .returning() for ${operation} on ${tableName}`);
-              if (typeof target.returning === "function") {
-                queryToExecute = target.returning();
-              }
-            } else if (shouldAugmentReturning && typeof target.returning === "function") {
-              // User selected partial columns; execute with full returning for audit,
-              // then project back to user's selection.
-              queryToExecute = fullReturningBuilder ?? target.returning();
-            }
-          }
-
-          // Create a promise that executes with audit
-          const auditedPromise = (async () => {
-            debug(`Executing ${operation} on ${tableName} with audit`);
-            return executeWithAudit(
-              operation,
-              tableName,
-              queryToExecute,
-              () => {
-                // Execute the query - Drizzle queries are thenable, so we can await them
-                return Promise.resolve(queryToExecute);
-              },
-              [],
-              db,
-              auditLogger,
-              tableRef,
-            );
-          })();
-
-          // Now apply the promise method to our audited promise
-          return auditedPromise.then(
-            (result) => {
-              const projected = projectUserResult ? projectUserResult(result) : result;
-              debug(
-                `${operation} on ${tableName} completed, result count: ${Array.isArray(projected) ? projected.length : 1}`,
-              );
-              if (prop === "then" && args[0]) {
-                return (args[0] as Function)(projected);
-              }
-              if (prop === "finally" && args[0]) {
-                (args[0] as Function)();
-              }
-              return projected;
-            },
-            (error) => {
-              debug(`${operation} on ${tableName} failed:`, error.message);
-              if (prop === "catch" && args[0]) {
-                return (args[0] as Function)(error);
-              }
-              if (prop === "finally" && args[0]) {
-                (args[0] as Function)();
-              }
-              throw error;
-            },
-          );
-        };
+      switch (prop) {
+        case "then":
+          return (
+            onFulfilled?: (value: unknown) => unknown,
+            onRejected?: (e: unknown) => unknown,
+          ) => run(state, target, () => target.execute()).then(onFulfilled, onRejected);
+        case "catch":
+          return (onRejected?: (e: unknown) => unknown) =>
+            run(state, target, () => target.execute()).catch(onRejected);
+        case "finally":
+          return (onFinally?: () => void) =>
+            run(state, target, () => target.execute()).finally(onFinally);
+        case "execute":
+          return (placeholderValues?: PlaceholderValues) =>
+            run(state, target, () => target.execute(placeholderValues), placeholderValues);
+        case "prepare":
+          return (...args: unknown[]) => prepare(state, target, args);
+        case "returning":
+          return (selection?: Record<string, unknown>) => {
+            state.selection = selection ?? null;
+            return chain(state, target, proxy, original.call(target, selection));
+          };
+        default:
+          return (...args: unknown[]) => chain(state, target, proxy, original.apply(target, args));
       }
-
-      // For fluent API methods (where, set, values, returning, etc.), continue wrapping
-      if (typeof original === "function") {
-        return function (...args: unknown[]) {
-          const result = (original as Function).apply(target, args);
-
-          // If it returns a new builder, wrap it too (preserve tableRef)
-          if (result && typeof result === "object" && result !== target) {
-            return createExecutionProxy(
-              operation,
-              result as QueryBuilderLike,
-              db,
-              auditLogger,
-              tableRef,
-            );
-          }
-
-          // Preserve the proxy when chaining methods that return `this`
-          if (result === target) {
-            return proxy;
-          }
-
-          return result;
-        };
-      }
-
-      return original;
     },
   });
 
@@ -339,193 +122,239 @@ function createExecutionProxy(
 }
 
 /**
- * Execute query with automatic audit logging
+ * Keep fluent calls (`values`, `set`, `where`, ...) on the proxy.
  */
-async function executeWithAudit(
-  operation: string,
-  tableName: string,
-  queryBuilder: QueryBuilderLike,
-  originalExecute: unknown,
-  executeArgs: unknown[],
-  db: PostgresJsDatabase<any>,
-  auditLogger: AuditLogger,
-  tableRef?: unknown,
-): Promise<unknown> {
-  let beforeState: unknown[] = [];
-
-  // For UPDATE only, capture the "before" state if configured
-  if (operation === "update" && auditLogger.shouldCaptureBeforeState()) {
-    beforeState = await captureBeforeState(tableName, queryBuilder, db, tableRef);
+function chain(state: BuilderState, target: Builder, proxy: Builder, result: unknown): unknown {
+  if (result === target) {
+    return proxy;
   }
-
-  // Execute the actual operation
-  // For DELETE, we rely on .returning() which is auto-injected
-  let result: unknown;
-  if (typeof originalExecute === "function" && (originalExecute as Function).length === 0) {
-    // It's a wrapper function we created
-    result = await (originalExecute as Function)();
-  } else if (originalExecute) {
-    // It's the original method from Drizzle
-    result = await (originalExecute as Function).apply(queryBuilder, executeArgs);
-  } else {
-    // No execute method, the queryBuilder itself is thenable
-    result = await Promise.resolve(queryBuilder as unknown);
+  if (isQueryBuilder(result)) {
+    return wrapBuilder({ ...state }, result);
   }
-
-  // Create audit logs based on operation type
-  await createAuditLogs(operation, tableName, beforeState, result, auditLogger);
-
   return result;
 }
 
+function isQueryBuilder(value: unknown): value is Builder {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Builder;
+  return (
+    typeof candidate.execute === "function" ||
+    typeof candidate.values === "function" ||
+    typeof candidate.set === "function"
+  );
+}
+
+function auditedTableName(state: BuilderState): string | null {
+  const tableName = isTable(state.table) ? getTableName(state.table) : null;
+  if (!tableName || !state.auditLogger.shouldAudit(tableName)) {
+    debug(`Skipping audit for ${state.operation} on ${tableName ?? "unknown table"}`);
+    return null;
+  }
+  return tableName;
+}
+
+async function run(
+  state: BuilderState,
+  builder: Builder,
+  execute: () => Promise<unknown>,
+  placeholderValues?: PlaceholderValues,
+): Promise<unknown> {
+  const tableName = auditedTableName(state);
+  if (!tableName) {
+    return execute();
+  }
+
+  const plan = planReturning(builder, state);
+  try {
+    return await runAudited(state, tableName, builder, plan, execute, placeholderValues);
+  } finally {
+    plan.restore();
+  }
+}
+
+function prepare(state: BuilderState, builder: Builder, args: unknown[]): unknown {
+  const tableName = auditedTableName(state);
+  if (!tableName) {
+    return builder.prepare(...args);
+  }
+
+  // RETURNING has to be part of the statement before it is prepared
+  const plan = planReturning(builder, state);
+  let prepared: Builder;
+  try {
+    prepared = builder.prepare(...args);
+  } finally {
+    plan.restore();
+  }
+
+  return new Proxy(prepared, {
+    get(target, prop) {
+      const original = target[prop];
+      if (prop !== "execute" || typeof original !== "function") {
+        return original;
+      }
+      return (placeholderValues?: PlaceholderValues) =>
+        runAudited(
+          state,
+          tableName,
+          builder,
+          plan,
+          () => original.call(target, placeholderValues),
+          placeholderValues,
+        );
+    },
+  });
+}
+
+async function runAudited(
+  state: BuilderState,
+  tableName: string,
+  builder: Builder,
+  plan: ReturningPlan,
+  execute: () => Promise<unknown>,
+  placeholderValues: PlaceholderValues,
+): Promise<unknown> {
+  const beforeState =
+    state.operation === "update" && state.auditLogger.shouldCaptureBeforeState()
+      ? await captureBeforeState(state, builder, placeholderValues)
+      : [];
+
+  const result = await execute();
+  const { returned, auditRows } = plan.split(result);
+
+  debug(`${state.operation} on ${tableName} returned ${auditRows.length} row(s)`);
+  await state.auditLogger.recordMutation(
+    state.operation,
+    tableName,
+    beforeState,
+    auditRows,
+    state.db,
+  );
+
+  return returned;
+}
+
 /**
- * Capture current state before UPDATE/DELETE
+ * Make the statement return full rows for the audit log. Drizzle's `.returning()` replaces the
+ * selection on the builder in place, which is why `restore()` exists.
+ */
+function planReturning(builder: Builder, state: BuilderState): ReturningPlan {
+  const { selection } = state;
+  const columns = isTable(state.table) ? (getTableColumns(state.table) as Row) : undefined;
+  const noop = () => {};
+
+  if (selection === null || (selection && !columns)) {
+    // `.returning()` already gives full rows (or there's no table to ask for more columns)
+    return {
+      split: (result) => ({ returned: result, auditRows: toRows(result) }),
+      restore: noop,
+    };
+  }
+
+  if (selection === undefined) {
+    // The caller didn't ask for rows; add RETURNING for the audit and keep the row count usable
+    builder.returning(columns);
+    return {
+      split: (result) => ({ returned: withRowCount(result), auditRows: toRows(result) }),
+      restore: noop,
+    };
+  }
+
+  // Partial selection: ask for every column under a prefix next to the caller's own selection
+  const userKeys = Object.keys(selection);
+  const usedKeys = new Set(userKeys);
+  const auditSelection: Row = {};
+  const auditKeys = new Map<string, string>();
+  for (const [key, column] of Object.entries(columns!)) {
+    let alias = AUDIT_KEY_PREFIX + key;
+    while (usedKeys.has(alias)) alias += "_";
+    usedKeys.add(alias);
+    auditSelection[alias] = column;
+    auditKeys.set(alias, key);
+  }
+  builder.returning({ ...auditSelection, ...selection });
+
+  return {
+    split(result) {
+      const rows = toRows(result);
+      return {
+        returned: rows.map((row) => pick(row, userKeys)),
+        auditRows: rows.map((row) =>
+          Object.fromEntries([...auditKeys].map(([alias, key]) => [key, row[alias]])),
+        ),
+      };
+    },
+    restore: () => builder.returning(selection),
+  };
+}
+
+/**
+ * Capture current state before UPDATE
  */
 async function captureBeforeState(
-  tableName: string,
-  queryBuilder: QueryBuilderLike,
-  db: PostgresJsDatabase<any>,
-  tableRef?: unknown,
-): Promise<unknown[]> {
+  state: BuilderState,
+  builder: Builder,
+  placeholderValues: PlaceholderValues,
+): Promise<Row[]> {
+  // An unlocked snapshot can go stale before UPDATE, even hiding a real change.
+  // Outside transactions use the returned after-state instead of attempting a diff.
+  if (!state.auditLogger.isTransaction(state.db)) {
+    return [];
+  }
+
+  const config = builder.config as { where?: unknown; from?: unknown; joins?: unknown[] };
+
+  if (!config?.where) {
+    debug("No WHERE clause, skipping before state capture");
+    return [];
+  }
+  if (config.from || config.joins?.length) {
+    // The WHERE clause may reference the other tables of an UPDATE ... FROM
+    debug("UPDATE ... FROM, skipping before state capture");
+    return [];
+  }
+
   try {
-    const whereClause = extractWhereClause(queryBuilder);
-
-    if (!whereClause) {
-      // If no WHERE clause, we can't safely query before state
-      // This might be a full table update/delete
-      console.warn(`No WHERE clause found for ${tableName}, skipping before state capture`);
-      return [];
-    }
-
-    // Query current state
-    const fromTarget =
-      (tableRef as any) ||
-      queryBuilder.table ||
-      queryBuilder._?.table ||
-      queryBuilder.config?.table;
-    const result = await db
+    const query = state.db
       .select()
-      .from(fromTarget as any)
-      .where(whereClause as any);
-
-    return Array.isArray(result) ? result : [result];
+      .from(state.table as any)
+      .where(config.where as any)
+      .for("update");
+    return toRows(await query.execute(placeholderValues));
   } catch (error) {
-    console.error("Failed to capture before state:", error);
+    state.auditLogger.logError("[AUDIT] Failed to capture before state:", error);
     return [];
   }
 }
 
-/**
- * Create audit logs after operation completes
- */
-function isRecordObject(value: unknown): value is Record<string, unknown> {
+function isRow(value: unknown): value is Row {
   return typeof value === "object" && value !== null;
 }
 
-function isSelectionObject(value: unknown): value is Record<string, unknown> {
-  return isRecordObject(value) && !Array.isArray(value);
+function toRows(result: unknown): Row[] {
+  return Array.isArray(result) ? result.filter(isRow) : [];
 }
 
-function projectReturningResult(result: unknown, keys: string[]): unknown {
-  if (keys.length === 0) return result;
-  if (Array.isArray(result)) {
-    return result.map((row) => projectReturningResult(row, keys));
-  }
-  if (!isRecordObject(result)) return result;
-  const projected: Record<string, unknown> = {};
+function pick(row: Row, keys: string[]): Row {
+  const picked: Row = {};
   for (const key of keys) {
-    if (key in result) {
-      projected[key] = result[key];
-    }
+    picked[key] = row[key];
   }
-  return projected;
-}
-
-async function createAuditLogs(
-  operation: string,
-  tableName: string,
-  beforeState: unknown[],
-  result: unknown,
-  auditLogger: AuditLogger,
-): Promise<void> {
-  const records = Array.isArray(result) ? result : result ? [result] : [];
-  const recordObjects = records.filter(isRecordObject);
-  const beforeObjects = beforeState.filter(isRecordObject);
-
-  debug(
-    `Creating audit logs for ${operation} on ${tableName}, records: ${records.length}, beforeState: ${beforeState.length}`,
-  );
-
-  if (recordObjects.length === 0 && beforeObjects.length === 0) {
-    debug("No records to audit");
-    return;
-  }
-
-  switch (operation) {
-    case "insert":
-      if (recordObjects.length > 0) {
-        debug(`Logging ${recordObjects.length} INSERT operations`);
-        await auditLogger.logInsert(tableName as any, recordObjects as any);
-      }
-      break;
-
-    case "update":
-      if (recordObjects.length > 0 && beforeObjects.length > 0) {
-        debug(`Logging ${recordObjects.length} UPDATE operations`);
-        await auditLogger.logUpdate(tableName as any, beforeObjects as any, recordObjects as any);
-      } else if (recordObjects.length > 0 && beforeObjects.length === 0) {
-        // Before state not captured; log with best-effort values
-        debug(`Logging ${recordObjects.length} UPDATE operations (without before state)`);
-        await auditLogger.logUpdate(tableName as any, [], recordObjects as any);
-      } else {
-        debug(
-          `Skipping UPDATE audit: records=${recordObjects.length}, beforeState=${beforeObjects.length}`,
-        );
-      }
-      break;
-
-    case "delete":
-      // For DELETE, we use data from .returning() which is auto-injected
-      // The deleted data is in the result
-      if (recordObjects.length > 0) {
-        debug(`Logging ${recordObjects.length} DELETE operations`);
-        await auditLogger.logDelete(tableName as any, recordObjects as any);
-      } else {
-        debug("Skipping DELETE audit: no records matched or returned");
-      }
-      break;
-  }
+  return picked;
 }
 
 /**
- * Wrap transaction method to maintain audit context
+ * Without RETURNING, drivers report how many rows changed: `rowCount` (node-postgres)
+ * or `count` (postgres-js). Mirror both onto the rows we got back instead.
  */
-function createTransactionProxy(originalTransaction: any, db: any, auditLogger: AuditLogger) {
-  return async function (
-    callback: (tx: PostgresJsDatabase<any>) => Promise<unknown>,
-    options?: unknown,
-  ) {
-    // Generate transaction ID
-    const transactionId = crypto.randomUUID();
-
-    // Merge transaction ID into current context
-    const currentContext = auditLogger.getContext() || {};
-    const transactionContext = {
-      ...currentContext,
-      transactionId,
-    };
-
-    // Run transaction with audit context
-    return auditLogger.withContext(transactionContext, async () => {
-      return (originalTransaction as Function).call(
-        db,
-        async (tx: PostgresJsDatabase<any>) => {
-          // Wrap the transaction db instance too
-          const wrappedTx = createInterceptedDb(tx, auditLogger);
-          return callback(wrappedTx);
-        },
-        options,
-      );
-    });
-  };
+function withRowCount(result: unknown): unknown {
+  if (!Array.isArray(result)) {
+    return result;
+  }
+  for (const key of ["rowCount", "count"]) {
+    if (!(key in result)) {
+      Object.defineProperty(result, key, { value: result.length, configurable: true });
+    }
+  }
+  return result;
 }

@@ -19,7 +19,7 @@
   "author": "White Room",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Jun-del/wr-audit-logger"
+    "url": "git+https://github.com/Jun-del/wr-audit-logger.git"
   },
   "files": [
     "dist",
@@ -28,18 +28,30 @@
   ],
   "type": "module",
   "sideEffects": false,
-  "main": "dist/index.cjs",
-  "types": "./dist/index.d.mts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.mts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
-    }
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsdown",
-    "ci": "pnpm run build && pnpm run format:check && pnpm run typecheck && pnpm run test",
+    "check:package": "publint --strict && attw --pack . --profile node16",
+    "ci": "pnpm run build && pnpm run check:package && pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test",
     "coverage": "vitest run --coverage",
     "dev": "tsdown --watch",
     "format": "oxfmt",
@@ -57,6 +69,7 @@
     "typecheck:types:v1": "tsc -p tsconfig.typecheck.v1.json --noEmit"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/cli": "^3.0.3",
     "@dotenvx/dotenvx": "^1.75.1",
     "@types/node": "^20.19.43",
@@ -69,6 +82,8 @@
     "oxfmt": "^0.73.0",
     "oxlint": "^1.88.0",
     "oxlint-tsgolint": "^7.0.2004",
+    "pg": "^8.23.1",
+    "publint": "^0.3.25",
     "tsdown": "^0.20.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
@@ -76,13 +91,7 @@
     "vitest": "^4.1.12"
   },
   "peerDependencies": {
-    "drizzle-orm": "^0.45.2 || ^1.0.0-rc.4",
-    "pg": "^8.17.2"
-  },
-  "peerDependenciesMeta": {
-    "pg": {
-      "optional": true
-    }
+    "drizzle-orm": "^0.45.2 || ^1.0.0-rc.4"
   },
   "engines": {
     "node": ">=20"

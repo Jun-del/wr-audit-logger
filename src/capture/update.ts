@@ -1,7 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AuditLog } from "../types/audit.js";
 import type { NormalizedConfig } from "../types/config.js";
 import { extractPrimaryKey } from "../utils/primary-key.js";
-import { filterFields, getChangedValues } from "../utils/serializer.js";
+import { filterFields, getChangedValues, isFieldTracked } from "../utils/serializer.js";
+
+/** Stored in place of an excluded field's value when that field changed */
+export const REDACTED = "[REDACTED]";
 
 /**
  * Create audit logs for UPDATE operations
@@ -55,10 +59,21 @@ export function createUpdateAuditLogs(
 
     const beforeValues = filterFields(before, tableName, config);
     const afterValues = filterFields(after, tableName, config);
-    const changedValues = getChangedValues(beforeValues, afterValues);
+    const changedValues = getChangedValues(beforeValues, afterValues) ?? {};
+
+    // Excluded values are never stored, but a change to one (e.g. a password reset) still is
+    for (const field of config.excludeFields) {
+      if (
+        field in after &&
+        isFieldTracked(field, tableName, config) &&
+        !isDeepStrictEqual(before[field], after[field])
+      ) {
+        changedValues[field] = REDACTED;
+      }
+    }
 
     // Only create audit log if something actually changed
-    if (changedValues && Object.keys(changedValues).length > 0) {
+    if (Object.keys(changedValues).length > 0) {
       logs.push({
         action: "UPDATE" as const,
         tableName,
